@@ -4,6 +4,32 @@
 
 这是基于 [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet) 的**便携版二次开发**，在原版基础上加了心情系统、分部位触摸等功能。
 
+## 效果预览
+
+> 动画为透明背景；GIF 预览中透明部分显示为页面底色，实际播放为透明。
+
+<p>
+  <img src="app/assets/preview/daiji-huxi-xiuxian.gif" width="220" alt="待机呼吸休闲" title="待机呼吸休闲">
+  <img src="app/assets/preview/dianji-huiying-kaixin-yuedong.gif" width="220" alt="点击回应-开心跃动" title="点击回应-开心跃动">
+  <img src="app/assets/preview/dianji-huiying-haixiu-jingya.gif" width="220" alt="点击回应-害羞惊讶" title="点击回应-害羞惊讶">
+  <img src="app/assets/preview/dianji-huiying-naoyang-gegexiao.gif" width="220" alt="点击回应-挠痒咯咯笑" title="点击回应-挠痒咯咯笑">
+  <img src="app/assets/preview/beixiayitiao-zhamao.gif" width="220" alt="被吓一跳（炸毛）" title="被吓一跳（炸毛）">
+  <img src="app/assets/preview/beishubiao-tuozhuai-xuankong-fankui.gif" width="220" alt="被鼠标拖拽悬空反馈" title="被鼠标拖拽悬空反馈">
+  <img src="app/assets/preview/shuijue-diyiduan.gif" width="220" alt="睡觉第一段" title="睡觉第一段">
+  <img src="app/assets/preview/kaishi-gongzuo.gif" width="220" alt="开始工作" title="开始工作">
+</p>
+
+**上面 8 个动作对应本 fork 的核心改动**：
+
+| 预览 | 对应功能 |
+|---|---|
+| 待机呼吸 / 开心跃动 / 害羞惊讶 / 挠痒咯咯笑 | **分部位触摸**：点脑袋三次会从「害羞」递进到「咯咯笑」 |
+| 被吓一跳（炸毛） | 点脚（命中区下 18%）的反应 |
+| 被鼠标拖拽悬空反馈 | 拖拽时的心情事件（−4，她不喜欢被拎） |
+| 睡觉第一段 / 开始工作 | 空闲自动触发的睡眠与工作（素材缺失时会被守卫拦下，不会定格） |
+
+预览图由 `make-preview-gifs.ps1` 从 `app/assets/webm/` 转出（220 宽 / 12fps / 64 色，与上游规格一致）。全部 136 段动画见上游仓库。
+
 ## 和原版有什么不同
 
 | 功能 | 原版 | 这里 |

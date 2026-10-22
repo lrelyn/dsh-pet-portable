@@ -13,6 +13,11 @@
 /runtime/node.exe
 /app/node_modules/
 
+# ---------- 工具链（下载即用，不进 git）----------
+# .tools/ 里是 ffmpeg（109 MB 解压后约 300 MB），只在生成预览 GIF 时用。
+# 需要时重新下载：https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip
+/.tools/
+
 # ---------- 大件二进制 ----------
 # 桌宠启动器（90 MB，源码在 launcher.js，可用它重新打包）
 /大肥鱼桌宠.exe
