@@ -10,49 +10,49 @@
 
 **基础状态**
 
-<img src="app/assets/preview/daiji-huxi-xiuxian.gif" width="200" alt="待机呼吸休闲" title="待机呼吸休闲">
-<img src="app/assets/preview/yuandi-xiaoqi-chenmian.gif" width="200" alt="原地小憩沉眠" title="原地小憩沉眠">
-<img src="app/assets/preview/haqian-liantian.gif" width="200" alt="哈欠连天" title="哈欠连天">
-<img src="app/assets/preview/dongzhang-xiwang.gif" width="200" alt="东张西望" title="东张西望">
+<img src="app/assets/preview/daiji-huxi-xiuxian.gif" width="320" alt="待机呼吸休闲" title="待机呼吸休闲">
+<img src="app/assets/preview/yuandi-xiaoqi-chenmian.gif" width="320" alt="原地小憩沉眠" title="原地小憩沉眠">
+<img src="app/assets/preview/haqian-liantian.gif" width="320" alt="哈欠连天" title="哈欠连天">
+<img src="app/assets/preview/dongzhang-xiwang.gif" width="320" alt="东张西望" title="东张西望">
 
 **分部位触摸** —— 点她不同部位有不同反应，连点同一部位还会递进（从害羞到咯咯笑）
 
-<img src="app/assets/preview/dianji-huiying-haixiu-jingya.gif" width="200" alt="点击回应-害羞惊讶" title="点击回应-害羞惊讶">
-<img src="app/assets/preview/dianji-huiying-kaixin-yuedong.gif" width="200" alt="点击回应-开心跃动" title="点击回应-开心跃动">
-<img src="app/assets/preview/dianji-huiying-naoyang-gegexiao.gif" width="200" alt="点击回应-挠痒咯咯笑" title="点击回应-挠痒咯咯笑">
-<img src="app/assets/preview/dianji-huiying-yuanqi-huishou.gif" width="200" alt="点击回应-元气挥手" title="点击回应-元气挥手">
-<img src="app/assets/preview/dianji-huiying-aojiao-shengqi.gif" width="200" alt="点击回应-傲娇生气" title="点击回应-傲娇生气">
-<img src="app/assets/preview/beixiayitiao-zhamao.gif" width="200" alt="被吓一跳（炸毛）" title="被吓一跳（炸毛）">
+<img src="app/assets/preview/dianji-huiying-haixiu-jingya.gif" width="320" alt="点击回应-害羞惊讶" title="点击回应-害羞惊讶">
+<img src="app/assets/preview/dianji-huiying-kaixin-yuedong.gif" width="320" alt="点击回应-开心跃动" title="点击回应-开心跃动">
+<img src="app/assets/preview/dianji-huiying-naoyang-gegexiao.gif" width="320" alt="点击回应-挠痒咯咯笑" title="点击回应-挠痒咯咯笑">
+<img src="app/assets/preview/dianji-huiying-yuanqi-huishou.gif" width="320" alt="点击回应-元气挥手" title="点击回应-元气挥手">
+<img src="app/assets/preview/dianji-huiying-aojiao-shengqi.gif" width="320" alt="点击回应-傲娇生气" title="点击回应-傲娇生气">
+<img src="app/assets/preview/beixiayitiao-zhamao.gif" width="320" alt="被吓一跳（炸毛）" title="被吓一跳（炸毛）">
 
 **拖拽与移动** —— 被她不喜欢被拎起来（心情 −4）
 
-<img src="app/assets/preview/beishubiao-tuozhuai-xuankong-fankui.gif" width="200" alt="被鼠标拖拽悬空反馈" title="被鼠标拖拽悬空反馈">
-<img src="app/assets/preview/pangxie-zoulu.gif" width="200" alt="螃蟹走路" title="螃蟹走路">
-<img src="app/assets/preview/yuandi-piaofu-tabu.gif" width="200" alt="原地漂浮踏步" title="原地漂浮踏步">
+<img src="app/assets/preview/beishubiao-tuozhuai-xuankong-fankui.gif" width="320" alt="被鼠标拖拽悬空反馈" title="被鼠标拖拽悬空反馈">
+<img src="app/assets/preview/pangxie-zoulu.gif" width="320" alt="螃蟹走路" title="螃蟹走路">
+<img src="app/assets/preview/yuandi-piaofu-tabu.gif" width="320" alt="原地漂浮踏步" title="原地漂浮踏步">
 
 **睡眠与工作** —— 空闲久了会自己睡、自己找活干；素材缺失时守卫会拦下，不会定格
 
-<img src="app/assets/preview/shuijue-diyiduan.gif" width="200" alt="睡觉第一段" title="睡觉第一段">
-<img src="app/assets/preview/shuijue-dierduan.gif" width="200" alt="睡觉第二段" title="睡觉第二段">
-<img src="app/assets/preview/kaishi-gongzuo.gif" width="200" alt="开始工作" title="开始工作">
-<img src="app/assets/preview/gongzuo-jieshu.gif" width="200" alt="工作结束" title="工作结束">
+<img src="app/assets/preview/shuijue-diyiduan.gif" width="320" alt="睡觉第一段" title="睡觉第一段">
+<img src="app/assets/preview/shuijue-dierduan.gif" width="320" alt="睡觉第二段" title="睡觉第二段">
+<img src="app/assets/preview/kaishi-gongzuo.gif" width="320" alt="开始工作" title="开始工作">
+<img src="app/assets/preview/gongzuo-jieshu.gif" width="320" alt="工作结束" title="工作结束">
 
 **日常与玩耍**
 
-<img src="app/assets/preview/keai-zhaivu.gif" width="200" alt="可爱宅舞" title="可爱宅舞">
-<img src="app/assets/preview/yuandi-zhuanxin-wan-mofang.gif" width="200" alt="原地专心玩魔方" title="原地专心玩魔方">
-<img src="app/assets/preview/dang-qiuqian.gif" width="200" alt="荡秋千" title="荡秋千">
-<img src="app/assets/preview/lu-mao.gif" width="200" alt="撸猫" title="撸猫">
+<img src="app/assets/preview/keai-zhaivu.gif" width="320" alt="可爱宅舞" title="可爱宅舞">
+<img src="app/assets/preview/yuandi-zhuanxin-wan-mofang.gif" width="320" alt="原地专心玩魔方" title="原地专心玩魔方">
+<img src="app/assets/preview/dang-qiuqian.gif" width="320" alt="荡秋千" title="荡秋千">
+<img src="app/assets/preview/lu-mao.gif" width="320" alt="撸猫" title="撸猫">
 
 **吃喝与时节** —— 节日当天「时节」类的出现权重会变高
 
-<img src="app/assets/preview/chi-xigua.gif" width="200" alt="吃西瓜" title="吃西瓜">
-<img src="app/assets/preview/fang-yanhua.gif" width="200" alt="放烟花" title="放烟花">
-<img src="app/assets/preview/dui-xueren.gif" width="200" alt="堆雪人" title="堆雪人">
+<img src="app/assets/preview/chi-xigua.gif" width="320" alt="吃西瓜" title="吃西瓜">
+<img src="app/assets/preview/fang-yanhua.gif" width="320" alt="放烟花" title="放烟花">
+<img src="app/assets/preview/dui-xueren.gif" width="320" alt="堆雪人" title="堆雪人">
 
 全部动画（640×360，插件实际播放用的资源）见插件包 `dsh-pet/assets/webm/`（VP9-alpha，唯一发布格式）；完整透明视频见上游仓库。
 
-预览图由 `make-preview-gifs.ps1` 从 `app/assets/webm/` 转出：220 宽 / 12fps / 256 色，规格与上游一致。
+预览图由 `make-preview-gifs.ps1` 从 `app/assets/webm/` 转出：320×180 / 12fps / 256 色，统一 16:9。
 
 ## 和原版有什么不同
 

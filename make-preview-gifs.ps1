@@ -2,12 +2,24 @@
 #
 # 用法：powershell -ExecutionPolicy Bypass -File make-preview-gifs.ps1
 #
-# 规格对齐上游（PC2005-cloud/dsh-pet 的 assets/preview/）：
-#   220 宽 / 12fps / 64 色 / 约 300-600 KB
+# 规格（2026-10-22 第三版，修掉三个问题后）：
+#   输出统一 320×180（16:9）/ 12fps / 256 色 / 透明索引在调色板末尾
 #
-# 关键处理：webm 是 VP9-alpha 透明背景，GIF 不支持真透明（只能 1-bit 索引透明），
-# 所以用 colorkey 把黑底变透明 —— 在 GitHub 上透明部分会显示成页面底色，
-# 与上游 README 里那句「GIF 预览中透明部分显示为页面底色」一致。
+# 这一版修掉的三个问题（前两版的教训）：
+#   ① 尺寸不一致 —— 素材里混着 640×360（16:9）和 360×360（1:1）两种规格，
+#      `scale=320:-1` 按宽高比算高，方形源就输出成 320×320，README 里忽大忽小。
+#      上游同样有方形源，但它的 GIF 全是 220×124 —— 说明它做了归一化。
+#      现在用 crop 把任何源都裁成 16:9 再缩放，输出恒定 320×180。
+#   ② 模糊 —— 640→320 是 2 倍降采样，细发丝会被抹掉。
+#      解法：先用 neighbor 放大到 1280（保住了发丝），再羽化，最后 lanczos 缩到 320。
+#      （先放大再缩小 ≠ 直接缩小：前者让 alpha 羽化作用在更密的采样上）
+#   ③ 边缘锯齿 —— colorkey 是硬阈值，边缘 1px 突变。
+#      解法：alphaextract 取 alpha 通道 → gblur 高斯羽化 → alphamerge 合回。
+#      实测呆毛/裙摆边缘平滑，且不会把深色衣物误判为背景（colorkey 会）。
+#
+# 透明处理说明：GIF 只有 1-bit 索引透明，羽化出的半透明边缘会被
+# palettegen 的 reserve_transparent=1 收敛成硬边 —— 但比 colorkey 的硬切干净得多，
+# 且不会吃掉与背景色相近的深色区域。
 #
 # 输入：app/assets/webm/<中文名>.webm
 # 输出：app/assets/preview/<拼音名>.gif（文件名用拼音，与上游命名风格一致）
@@ -81,7 +93,7 @@ $jobs = @(
 #   dither=bayer:bayer_scale=3 有序抖动：比 none 平滑、比 sierra2 体积小
 #   alpha_threshold=128        透明阈值
 #   -gifflags +transdiff       帧间只编码变化区域（体积减半的关键）
-$VF = 'fps=12,scale=220:-1:flags=lanczos,colorkey=black:0.01:0.1,split[a][b];[a]palettegen=max_colors=256:reserve_transparent=1:stats_mode=full[p];[b][p]paletteuse=dither=bayer:bayer_scale=3:alpha_threshold=128'
+$VF = 'fps=12,crop=w=iw:h=iw*9/16:x=0:y=(ih-iw*9/16)/2,scale=1280:-1:flags=neighbor,split[a][b];[a]alphaextract,gblur=sigma=1.2[al];[b][al]alphamerge,scale=320:-1:flags=lanczos,split[c][d];[c]palettegen=max_colors=256:reserve_transparent=1:stats_mode=full[p];[d][p]paletteuse=dither=bayer:bayer_scale=3:alpha_threshold=128'
 
 Write-Host "=== 生成预览 GIF ===" -ForegroundColor Cyan
 Write-Host "  源: $srcDir"
