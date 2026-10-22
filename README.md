@@ -4,6 +4,46 @@
 
 这是基于 [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet) 的**便携版二次开发**，在原版基础上加了心情系统、分部位触摸等功能。
 
+## 下载安装
+
+**[→ 去 Releases 下载完整安装包](https://github.com/lrelyn/dsh-pet-portable/releases/latest)**
+
+```powershell
+# 1. 下载 dsh-pet-portable-<版本>-win64.zip（约 372 MB）
+# 2. 解压到任意位置（桌面、D 盘、U 盘都行）
+# 3. 双击 大肥鱼桌宠.exe
+```
+
+| 项 | 要求 |
+|---|---|
+| 系统 | Windows 10/11 64 位（**Win7/8 不支持**） |
+| 磁盘 | 约 1.6 GB（解压后） |
+| 其他 | 无需装 Node / Electron / DSH；未签名程序，杀毒软件可能误报需放行 |
+
+**必须整个文件夹一起拷**，只拷 exe 没用。
+
+### 三种使用方式
+
+| 方式 | 命令 | 适合 |
+|---|---|---|
+| **安装包**（推荐） | 双击 `大肥鱼桌宠.exe` | 普通用户 |
+| **源码跑** | `runtime\node.exe app\lib\standalone.js --port 3080` | 开发者，改完立刻看效果 |
+| **DSH 插件** | `dsh plugin add dsh-pet` | 想要说话/余额/联动的人（装上游版） |
+
+### 常见问题
+
+**双击没反应？**
+看 `pet.log`。首次启动会先试 Chromium 沙箱，失败会自动降级重试，两种情况日志里都写了。
+
+**桌宠出现了但任务栏没有图标？**
+正常的，它在系统托盘里。结束它：任务管理器里结束 `electron.exe`。
+
+**想改配置？**
+编辑 `%USERPROFILE%\.dsh\dsh-pet\main-config.jsonc`（心情阈值、触摸池、动作池都在里面）。注意**不是**项目目录下 `data\dsh-pet\` 那份——那是旧遗留，改了不生效。
+
+**动作太少 / 想自己加动作？**
+见下方「自己造动作」。放好的 `.webm` 丢进 `%USERPROFILE%\.dsh\dsh-pet\main-animation\webm\` 就行，不用动包内文件。
+
 ## 效果预览
 
 > 动画为透明背景；GIF 预览中透明部分显示为页面底色，实际播放为透明。
@@ -92,6 +132,8 @@ dsh-pet-portable/
 | `大肥鱼桌宠.exe` | 90 MB | 用 `launcher.js` 重新打包 |
 
 **所以本仓库 clone 下来不能直接运行**，需要补齐运行时和素材。完整步骤见 [my-life-archive 的恢复清单](https://github.com/lrelyn/my-life-archive/blob/main/notes/dsh-pet-restore.md)。
+
+> **只是想像普通用户一样用？** 别折腾这些 —— 直接去 [Releases](https://github.com/lrelyn/dsh-pet-portable/releases/latest) 下打包好的完整版（约 372 MB），解压双击就能跑。
 
 ## 自己造动作
 

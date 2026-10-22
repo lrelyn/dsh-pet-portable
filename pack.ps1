@@ -32,8 +32,13 @@ if (-not $Version) {
 
 if (-not $Out) { $Out = [Environment]::GetFolderPath('Desktop') }
 $stamp = Get-Date -Format 'yyyyMMdd-HHmm'
+# 两个产物：
+#   带中文和时间戳的（本地留档）
+#   纯 ASCII 固定名的（上传 GitHub Release 用 —— 中文名在某些浏览器上传时会被改编码）
 $zipName = "大肥鱼桌宠-v$Version-$stamp.zip"
 $zipPath = Join-Path $Out $zipName
+$releaseName = "dsh-pet-portable-$Version-win64.zip"
+$releasePath = Join-Path $Out $releaseName
 
 Write-Host "=== 大肥鱼桌宠打包 ===" -ForegroundColor Cyan
 Write-Host "  源目录  $root"
@@ -46,7 +51,8 @@ $excludeDirs = @(
   'node_modules',      # 构建依赖，运行不需要
   '_还原点',            # 作者留的原始副本
   '_exe',               # 同上
-  '.git'
+  '.git',
+  '.tools'             # ffmpeg（109 MB zip + 300 MB 解压），只在生成预览 GIF 时用
 )
 # 特殊排除：electron/resources/app 是 Electron 的"默认应用"目录，我们显式传
 # `electron.exe <app/runtime/electron-helper/main.js>` 启动（renderer 进程的
@@ -65,6 +71,8 @@ $excludeFilePatterns = @(
   '*.before-*',
   'mood-tune.ps1',     # 我的调参辅助脚本（非产品功能）
   'pack.ps1',          # 打包脚本本身（构建工具，不进包）
+  'make-preview-gifs.ps1', # 预览 GIF 生成脚本（构建工具，不进包）
+  'release-list.txt',  # 打包校验用的临时清单
   'dbg-*',             # 调试残留
   '*.tmp'
 )
@@ -127,7 +135,7 @@ Write-Host "  打包 $($files.Count) 个文件，共 $totalMB MB"
 
 # --- 压缩 ---
 Write-Host ""
-Write-Host "--- 压缩 ---"
+Write-Host "--- 压缩（约 800 MB，需要几分钟）---"
 if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $zip = [System.IO.Compression.ZipFile]::Open($zipPath, 'Create')
@@ -141,10 +149,17 @@ try {
   $zip.Dispose()
 }
 
+# --- 额外复制一份 ASCII 固定名的（上传 GitHub Release 用）---
+Copy-Item $zipPath $releasePath -Force
+
 $zipMB = [math]::Round((Get-Item $zipPath).Length / 1MB, 1)
 Write-Host ""
 Write-Host "=== 打包完成 ===" -ForegroundColor Green
-Write-Host "  $zipPath"
+Write-Host "  本地留档  $zipPath"
+Write-Host "  上传用    $releasePath"
 Write-Host "  $($files.Count) 个文件 / 原始 $totalMB MB → 压缩后 $zipMB MB"
+Write-Host ""
+Write-Host "下一步：把「上传用」那个 zip 拖到 GitHub Release" -ForegroundColor Yellow
+Write-Host "  https://github.com/lrelyn/dsh-pet-portable/releases/new?tag=v$Version"
 Write-Host ""
 Write-Host "用法：解压后双击 大肥鱼桌宠.exe（整个文件夹一起拷，只拷 exe 无效）"
