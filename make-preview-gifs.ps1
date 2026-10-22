@@ -1,4 +1,4 @@
-﻿# make-preview-gifs.ps1 —— 从 webm 批量生成 README 预览 GIF
+# make-preview-gifs.ps1 —— 从 webm 批量生成 README 预览 GIF
 #
 # 用法：powershell -ExecutionPolicy Bypass -File make-preview-gifs.ps1
 #
@@ -60,10 +60,12 @@ $jobs = @(
   @{ cn = '螃蟹走路';            out = 'pangxie-zoulu';             group = '拖拽' },
   @{ cn = '原地漂浮踏步';        out = 'yuandi-piaofu-tabu';        group = '拖拽' },
 
-  # ---- 睡眠 / 工作（本 fork 加守卫的，4）----
+  # ---- 睡眠 / 工作（本 fork 加守卫的，6：各 3 段整套）----
   @{ cn = '睡觉第一段';          out = 'shuijue-diyiduan';          group = '睡眠工作' },
   @{ cn = '睡觉第二段';          out = 'shuijue-dierduan';          group = '睡眠工作' },
+  @{ cn = '睡觉第三段';          out = 'shuijue-disanduan';         group = '睡眠工作' },
   @{ cn = '开始工作';            out = 'kaishi-gongzuo';            group = '睡眠工作' },
+  @{ cn = '工作思考';            out = 'gongzuo-sikao';             group = '睡眠工作' },
   @{ cn = '工作结束';            out = 'gongzuo-jieshu';            group = '睡眠工作' },
 
   # ---- 小动作 / 玩耍（4）----
