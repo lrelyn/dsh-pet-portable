@@ -109,22 +109,22 @@ $jobs = @(
 #   · 横屏源：不动，人物占比 33% 作为基准（部分动作手臂会挥到边缘，裁会切手）
 #   · 方形源：缩到 192 宽（人物 193→约 115），再 pad 回 320x180 居中补透明
 function Build-Filter([int]$SrcW, [int]$SrcH) {
+  # 方形源：缩小到 160x180 内后**立即 pad 到 320x180**
+  # 顺序：scale(限高180) → pad(补到320x180) → 后续统一放大/羽化/缩到320
+  # 若把 pad 放到 scale=320:-1 之后，方形源会被拉成 320x360，pad 就因"比目标大"而失败
   $pre = if ($SrcW -gt $SrcH) {
     'null'
   } else {
-    # 方形源（360x360）：先缩到 160x180 内（保持比例），再 pad 补足到 320x180
-    # force_original_aspect_ratio=decrease 保证不超框
-    # 192 宽时实测睡觉第二段人物仍占 53%，降到 160 后回到 ~40%
     'scale=160:180:force_original_aspect_ratio=decrease:flags=lanczos,pad=320:180:(ow-iw)/2:(oh-ih)/2:color=black@0'
   }
   $post = 'scale=1280:-1:flags=neighbor,' +
-           'split[a][b];' +
-           '[a]alphaextract,gblur=sigma=1.2[al];' +
-           '[b][al]alphamerge,' +
-           'scale=320:-1:flags=lanczos,' +
-           'split[c][d];' +
-           '[c]palettegen=max_colors=256:reserve_transparent=1:stats_mode=full[p];' +
-           '[d][p]paletteuse=dither=bayer:bayer_scale=3:alpha_threshold=128'
+          'split[a][b];' +
+          '[a]alphaextract,gblur=sigma=1.2[al];' +
+          '[b][al]alphamerge,' +
+          'scale=320:-1:flags=lanczos,' +
+          'split[c][d];' +
+          '[c]palettegen=max_colors=256:reserve_transparent=1:stats_mode=full[p];' +
+          '[d][p]paletteuse=dither=bayer:bayer_scale=3:alpha_threshold=128'
   if ($pre -eq 'null') { return "fps=12,$post" }
   return "fps=12,$pre,$post"
 }
@@ -159,8 +159,11 @@ foreach ($j in $jobs) {
   $srcW = [int]($wh[0]); $srcH = [int]($wh[1])
   $vf = Build-Filter $srcW $srcH
 
-  # -gifflags +transdiff：帧间只编码变化区域，体积能减一半（上游 GIF 也是这么压出来的）
-  & $FFMPEG -y -hide_banner -loglevel error -c:v libvpx-vp9 -i $src -vf $vf -gifflags +transdiff -loop 0 $dst 2>&1 | Out-Null
+  # 注意：**不要**加 -c:v libvpx-vp9。
+  # 上游 chroma_step02.py 里写它是为了在 rawvideo 管道中转时保留 VP9 alpha，
+  # 但直接读 webm 文件时显式指定 libvpx 解码器会让 alpha 边缘出现 1px 白环
+  # （实测：加上就有白边，去掉就干净）。让 ffmpeg 自动探测即可。
+  & $FFMPEG -y -hide_banner -loglevel error -i $src -vf $vf -gifflags +transdiff -loop 0 $dst 2>&1 | Out-Null
   if ($LASTEXITCODE -eq 0 -and (Test-Path $dst)) {
     $kb = [math]::Round((Get-Item $dst).Length / 1KB, 0)
     Write-Host ("  OK   {0,-32} {1,5} KB" -f $j.out, $kb) -ForegroundColor Green

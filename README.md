@@ -92,7 +92,6 @@
 </tr>
 <tr>
 <td><img src="app/assets/preview/yuandi-piaofu-tabu.gif" width="320" alt="原地漂浮踏步" title="原地漂浮踏步"></td>
-<td></td>
 </tr>
 </table>
 
@@ -107,7 +106,6 @@
 </tr>
 <tr>
 <td><img src="app/assets/preview/shuijue-disanduan.gif" width="320" alt="睡觉第三段（醒来）" title="睡觉第三段（醒来）"></td>
-<td></td>
 </tr>
 </table>
 
@@ -122,7 +120,6 @@
 </tr>
 <tr>
 <td><img src="app/assets/preview/gongzuo-jieshu.gif" width="320" alt="工作结束（坐→站）" title="工作结束（坐→站）"></td>
-<td></td>
 </tr>
 </table>
 
@@ -150,7 +147,6 @@
 </tr>
 <tr>
 <td><img src="app/assets/preview/dui-xueren.gif" width="320" alt="堆雪人" title="堆雪人"></td>
-<td></td>
 </tr>
 </table>
 
