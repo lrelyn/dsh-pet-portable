@@ -27,16 +27,43 @@ $outDir = Join-Path $root 'app\assets\preview'
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
 # 要生成预览的动作：中文名 → 输出文件名（拼音）
-# 选这 8 个是因为它们覆盖了本 fork 的核心功能
+# 24 个，覆盖配置里的全部分类。分组说明见 README。
 $jobs = @(
-  @{ cn = '待机呼吸休闲';        out = 'daiji-huxi-xiuxian' },
-  @{ cn = '点击回应-害羞惊讶';    out = 'dianji-huiying-haixiu-jingya' },
-  @{ cn = '点击回应-开心跃动';    out = 'dianji-huiying-kaixin-yuedong' },
-  @{ cn = '点击回应-挠痒咯咯笑';  out = 'dianji-huiying-naoyang-gegexiao' },
-  @{ cn = '被吓一跳（炸毛）';     out = 'beixiayitiao-zhamao' },
-  @{ cn = '被鼠标拖拽悬空反馈';   out = 'beishubiao-tuozhuai-xuankong-fankui' },
-  @{ cn = '睡觉第一段';          out = 'shuijue-diyiduan' },
-  @{ cn = '开始工作';            out = 'kaishi-gongzuo' }
+  # ---- 基础状态（4）----
+  @{ cn = '待机呼吸休闲';        out = 'daiji-huxi-xiuxian';        group = '基础' },
+  @{ cn = '原地小憩沉眠';        out = 'yuandi-xiaoqi-chenmian';    group = '基础' },
+  @{ cn = '哈欠连天';            out = 'haqian-liantian';           group = '基础' },
+  @{ cn = '东张西望';            out = 'dongzhang-xiwang';          group = '基础' },
+
+  # ---- 分部位触摸（本 fork 核心，6）----
+  @{ cn = '点击回应-害羞惊讶';    out = 'dianji-huiying-haixiu-jingya';   group = '触摸' },
+  @{ cn = '点击回应-开心跃动';    out = 'dianji-huiying-kaixin-yuedong';  group = '触摸' },
+  @{ cn = '点击回应-挠痒咯咯笑';  out = 'dianji-huiying-naoyang-gegexiao'; group = '触摸' },
+  @{ cn = '点击回应-元气挥手';    out = 'dianji-huiying-yuanqi-huishou';  group = '触摸' },
+  @{ cn = '点击回应-傲娇生气';    out = 'dianji-huiying-aojiao-shengqi';  group = '触摸' },
+  @{ cn = '被吓一跳（炸毛）';     out = 'beixiayitiao-zhamao';       group = '触摸' },
+
+  # ---- 拖拽 / 移动（3）----
+  @{ cn = '被鼠标拖拽悬空反馈';   out = 'beishubiao-tuozhuai-xuankong-fankui'; group = '拖拽' },
+  @{ cn = '螃蟹走路';            out = 'pangxie-zoulu';             group = '拖拽' },
+  @{ cn = '原地漂浮踏步';        out = 'yuandi-piaofu-tabu';        group = '拖拽' },
+
+  # ---- 睡眠 / 工作（本 fork 加守卫的，4）----
+  @{ cn = '睡觉第一段';          out = 'shuijue-diyiduan';          group = '睡眠工作' },
+  @{ cn = '睡觉第二段';          out = 'shuijue-dierduan';          group = '睡眠工作' },
+  @{ cn = '开始工作';            out = 'kaishi-gongzuo';            group = '睡眠工作' },
+  @{ cn = '工作结束';            out = 'gongzuo-jieshu';            group = '睡眠工作' },
+
+  # ---- 小动作 / 玩耍（4）----
+  @{ cn = '可爱宅舞';            out = 'keai-zhaivu';               group = '日常' },
+  @{ cn = '原地专心玩魔方';      out = 'yuandi-zhuanxin-wan-mofang'; group = '日常' },
+  @{ cn = '荡秋千';              out = 'dang-qiuqian';              group = '日常' },
+  @{ cn = '撸猫';                out = 'lu-mao';                    group = '日常' },
+
+  # ---- 吃什么 / 时节（3）----
+  @{ cn = '吃西瓜';              out = 'chi-xigua';                 group = '吃喝时节' },
+  @{ cn = '放烟花';              out = 'fang-yanhua';               group = '吃喝时节' },
+  @{ cn = '堆雪人';              out = 'dui-xueren';                group = '吃喝时节' }
 )
 
 # 统一转码参数（与上游规格对齐，2026-10-22 修正版）
