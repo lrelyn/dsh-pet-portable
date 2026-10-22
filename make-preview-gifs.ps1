@@ -1,4 +1,4 @@
-# make-preview-gifs.ps1 —— 从 webm 批量生成 README 预览 GIF
+﻿# make-preview-gifs.ps1 —— 从 webm 批量生成 README 预览 GIF
 #
 # 用法：powershell -ExecutionPolicy Bypass -File make-preview-gifs.ps1
 #
@@ -33,6 +33,9 @@ $toolsDir = Join-Path $root '.tools'
 $ff = Get-ChildItem $toolsDir -Recurse -Filter ffmpeg.exe -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $ff) { throw "找不到 ffmpeg.exe（应在 .tools/ 下）" }
 $FFMPEG = $ff.FullName
+# ffprobe 与 ffmpeg 同目录（用来读源视频尺寸，选对应的 filter）
+$FFPROBE = Join-Path (Split-Path $FFMPEG -Parent) 'ffprobe.exe'
+if (-not (Test-Path $FFPROBE)) { throw "找不到 ffprobe.exe（应与 ffmpeg 同目录）" }
 
 $srcDir = Join-Path $root 'app\assets\webm'
 $outDir = Join-Path $root 'app\assets\preview'
@@ -95,7 +98,38 @@ $jobs = @(
 #   dither=bayer:bayer_scale=3 有序抖动：比 none 平滑、比 sierra2 体积小
 #   alpha_threshold=128        透明阈值
 #   -gifflags +transdiff       帧间只编码变化区域（体积减半的关键）
-$VF = 'fps=12,crop=w=iw:h=iw*9/16:x=0:y=(ih-iw*9/16)/2,scale=1280:-1:flags=neighbor,split[a][b];[a]alphaextract,gblur=sigma=1.2[al];[b][al]alphamerge,scale=320:-1:flags=lanczos,split[c][d];[c]palettegen=max_colors=256:reserve_transparent=1:stats_mode=full[p];[d][p]paletteuse=dither=bayer:bayer_scale=3:alpha_threshold=128'
+# 按源视频尺寸生成 filter graph（2026-10-22 第四版）
+#
+# 背景：裁成统一 16:9 后发现两组源的人物大小差 2 倍——
+#   横屏源(640x360)人物占画布 33% 宽（105/320），
+#   方形源(360x360)裁 16:9 后人物占 60% 宽（193/320）。
+#   README 并排显示时睡眠/工作那 6 张的人物明显比其他大一倍。
+#
+# 方案：按人物占比归一化，让两组视觉大小一致
+#   · 横屏源：不动，人物占比 33% 作为基准（部分动作手臂会挥到边缘，裁会切手）
+#   · 方形源：缩到 192 宽（人物 193→约 115），再 pad 回 320x180 居中补透明
+function Build-Filter([int]$SrcW, [int]$SrcH) {
+  $pre = if ($SrcW -gt $SrcH) {
+    'null'
+  } else {
+    # 方形源（360x360）：先缩到 160x180 内（保持比例），再 pad 补足到 320x180
+    # force_original_aspect_ratio=decrease 保证不超框
+    # 192 宽时实测睡觉第二段人物仍占 53%，降到 160 后回到 ~40%
+    'scale=160:180:force_original_aspect_ratio=decrease:flags=lanczos,pad=320:180:(ow-iw)/2:(oh-ih)/2:color=black@0'
+  }
+  $post = 'scale=1280:-1:flags=neighbor,' +
+           'split[a][b];' +
+           '[a]alphaextract,gblur=sigma=1.2[al];' +
+           '[b][al]alphamerge,' +
+           'scale=320:-1:flags=lanczos,' +
+           'split[c][d];' +
+           '[c]palettegen=max_colors=256:reserve_transparent=1:stats_mode=full[p];' +
+           '[d][p]paletteuse=dither=bayer:bayer_scale=3:alpha_threshold=128'
+  if ($pre -eq 'null') { return "fps=12,$post" }
+  return "fps=12,$pre,$post"
+}
+
+$VF = Build-Filter 640 360   # 默认值，实际按每个源的尺寸重算（见下方循环）
 
 Write-Host "=== 生成预览 GIF ===" -ForegroundColor Cyan
 Write-Host "  源: $srcDir"
@@ -120,8 +154,13 @@ foreach ($j in $jobs) {
     continue
   }
 
+  # 按这个源的尺寸选 filter（横屏 vs 方形的人物占比归一化）
+  $wh = & $FFPROBE -v error -select_streams v:0 -show_entries "stream=width,height" -of default=noprint_wrappers=1:nokey=1 $src 2>&1
+  $srcW = [int]($wh[0]); $srcH = [int]($wh[1])
+  $vf = Build-Filter $srcW $srcH
+
   # -gifflags +transdiff：帧间只编码变化区域，体积能减一半（上游 GIF 也是这么压出来的）
-  & $FFMPEG -y -hide_banner -loglevel error -c:v libvpx-vp9 -i $src -vf $VF -gifflags +transdiff -loop 0 $dst 2>&1 | Out-Null
+  & $FFMPEG -y -hide_banner -loglevel error -c:v libvpx-vp9 -i $src -vf $vf -gifflags +transdiff -loop 0 $dst 2>&1 | Out-Null
   if ($LASTEXITCODE -eq 0 -and (Test-Path $dst)) {
     $kb = [math]::Round((Get-Item $dst).Length / 1KB, 0)
     Write-Host ("  OK   {0,-32} {1,5} KB" -f $j.out, $kb) -ForegroundColor Green
