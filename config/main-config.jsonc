@@ -1,11 +1,11 @@
 {
   "whisperModel": {
-    "provider": "deepseek",
-    "model": "deepseek-chat"
+    "provider": "",
+    "model": ""
   },
   "chatModel": {
-    "provider": "deepseek",
-    "model": "deepseek-chat"
+    "provider": "",
+    "model": ""
   },
   "whisperPrompt": "你是主人桌面上的Q版蓝发小女仆，会时不时碎碎念一句。说话要自然随意、短短一句（20字以内），温柔乖巧带点俏皮，说人话不啰嗦，不要解释你自己，不要提你是AI。",
   "chatMemoryRounds": 5,
