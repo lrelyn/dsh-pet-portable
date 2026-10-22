@@ -39,12 +39,22 @@ $jobs = @(
   @{ cn = '开始工作';            out = 'kaishi-gongzuo' }
 )
 
-# 统一转码参数（与上游规格对齐）
-#   fps=12       上游就是 12fps，动作节奏刚好
-#   scale=220    上游宽度
-#   colorkey     黑底变透明（GIF 只有 1-bit 透明，边缘会有轻微锯齿，可接受）
-#   max_colors=64 64 色足够表现 Q 版人物，体积小一半
-$VF = 'fps=12,scale=220:-1:flags=lanczos,colorkey=black:0.01:0.1,split[a][b];[a]palettegen=max_colors=64:reserve_transparent=0[p];[b][p]paletteuse=dither=none'
+# 统一转码参数（与上游规格对齐，2026-10-22 修正版）
+#
+# 修正记录：第一版用 max_colors=64 + dither=none + reserve_transparent=0，
+# 结果是色带明显、透明索引落在调色板第 0 位（黑色），人物边缘发脏、整体发灰。
+# 二进制解析上游 GIF 后发现它是：256 色 / 透明索引 255（末尾）/ disposal=2。
+# 改成下面这套后效果与上游一致：
+#   fps=12                     上游帧率
+#   scale=220                  上游宽度
+#   colorkey=black:0.01:0.1    VP9-alpha 的透明在 ffmpeg 里表现为黑底，转成真透明
+#   max_colors=256             满色板，避免渐变色带
+#   reserve_transparent=1      给透明色留一个索引（关键：不留就会吃掉边缘）
+#   stats_mode=full            整段统计调色板，帧间色差小
+#   dither=bayer:bayer_scale=3 有序抖动：比 none 平滑、比 sierra2 体积小
+#   alpha_threshold=128        透明阈值
+#   -gifflags +transdiff       帧间只编码变化区域（体积减半的关键）
+$VF = 'fps=12,scale=220:-1:flags=lanczos,colorkey=black:0.01:0.1,split[a][b];[a]palettegen=max_colors=256:reserve_transparent=1:stats_mode=full[p];[b][p]paletteuse=dither=bayer:bayer_scale=3:alpha_threshold=128'
 
 Write-Host "=== 生成预览 GIF ===" -ForegroundColor Cyan
 Write-Host "  源: $srcDir"
@@ -69,7 +79,8 @@ foreach ($j in $jobs) {
     continue
   }
 
-  & $FFMPEG -y -hide_banner -loglevel error -c:v libvpx-vp9 -i $src -vf $VF -loop 0 $dst 2>&1 | Out-Null
+  # -gifflags +transdiff：帧间只编码变化区域，体积能减一半（上游 GIF 也是这么压出来的）
+  & $FFMPEG -y -hide_banner -loglevel error -c:v libvpx-vp9 -i $src -vf $VF -gifflags +transdiff -loop 0 $dst 2>&1 | Out-Null
   if ($LASTEXITCODE -eq 0 -and (Test-Path $dst)) {
     $kb = [math]::Round((Get-Item $dst).Length / 1KB, 0)
     Write-Host ("  OK   {0,-32} {1,5} KB" -f $j.out, $kb) -ForegroundColor Green
