@@ -46,8 +46,8 @@
 
 ## 效果预览
 
-> 动画为透明背景；GIF 预览中透明部分显示为页面底色，实际播放为透明。
-> 26 张全部统一 320×180；用表格排版保证每行张数一致、不会被浏览器宽度打乱。
+> 30 张全部统一 320×180、**白底**（GIF 的透明在深色主题下会显示成黑块，所以直接铺白底）。
+> 用表格排版，每组都是偶数张、每行 2 张，不会有落单的半格。
 
 ### 基础状态
 
@@ -92,6 +92,7 @@
 </tr>
 <tr>
 <td><img src="app/assets/preview/yuandi-piaofu-tabu.gif" width="320" alt="原地漂浮踏步" title="原地漂浮踏步"></td>
+<td><img src="app/assets/preview/yuandi-zuozhuan-benpao.gif" width="320" alt="原地左转奔跑" title="原地左转奔跑"></td>
 </tr>
 </table>
 
@@ -106,6 +107,7 @@
 </tr>
 <tr>
 <td><img src="app/assets/preview/shuijue-disanduan.gif" width="320" alt="睡觉第三段（醒来）" title="睡觉第三段（醒来）"></td>
+<td><img src="app/assets/preview/beixiayitiao.gif" width="320" alt="被吓一跳（被吵醒）" title="被吓一跳（被吵醒）"></td>
 </tr>
 </table>
 
@@ -119,6 +121,7 @@
 <td><img src="app/assets/preview/gongzuo-sikao.gif" width="320" alt="工作思考（中间段之一）" title="工作思考（中间段之一）"></td>
 </tr>
 <tr>
+<td><img src="app/assets/preview/renzhen-gongzuo.gif" width="320" alt="认真工作（中间段之二）" title="认真工作（中间段之二）"></td>
 <td><img src="app/assets/preview/gongzuo-jieshu.gif" width="320" alt="工作结束（坐→站）" title="工作结束（坐→站）"></td>
 </tr>
 </table>
@@ -143,16 +146,19 @@
 <table>
 <tr>
 <td><img src="app/assets/preview/chi-xigua.gif" width="320" alt="吃西瓜" title="吃西瓜"></td>
-<td><img src="app/assets/preview/fang-yanhua.gif" width="320" alt="放烟花" title="放烟花"></td>
+<td><img src="app/assets/preview/chi-bingqilin-ronghua.gif" width="320" alt="吃冰淇淋融化" title="吃冰淇淋融化"></td>
 </tr>
 <tr>
+<td><img src="app/assets/preview/fang-yanhua.gif" width="320" alt="放烟花" title="放烟花"></td>
 <td><img src="app/assets/preview/dui-xueren.gif" width="320" alt="堆雪人" title="堆雪人"></td>
 </tr>
 </table>
 
 全部动画（640×360，插件实际播放用的资源）见插件包 `dsh-pet/assets/webm/`（VP9-alpha，唯一发布格式）；完整透明视频见上游仓库。
 
-预览图由 `make-preview-gifs.ps1` 从 `app/assets/webm/` 转出：320×180 / 12fps / 256 色，26 张。
+预览图由 `make-preview-gifs.py` 从 `app/assets/webm/` 转出：320×180 / 12fps / 白底，30 张。
+（ffmpeg 抽帧 PNG → PIL 合成白底 → GIF。为什么不直接让 ffmpeg 出 GIF：VP9-alpha 的透明区
+在 GitHub 深色主题下会显示成黑块，而 ffmpeg 内联铺白底的 6 种方案都读不到正确的 alpha。）
 
 ## 和原版有什么不同
 
