@@ -43,7 +43,15 @@ const path = require('node:path');
 const http = require('node:http');
 const { spawn, spawnSync, execFileSync } = require('node:child_process');
 
-const base = path.dirname(process.execPath);
+// Package root. Normally this is the folder containing the running executable, which
+// is what makes the build portable (copy the folder anywhere).
+//
+// DSH_PET_ROOT overrides it for development only: running `node launcher.js` sets
+// process.execPath to node.exe, so dirname() would point at the runtime folder
+// instead of the package. The packaged exe never sets this variable.
+const base = process.env.DSH_PET_ROOT
+  ? path.resolve(process.env.DSH_PET_ROOT)
+  : path.dirname(process.execPath);
 const NODE = path.join(base, 'runtime', 'node.exe');
 const ENTRY = path.join(base, 'app', 'lib', 'standalone.js');
 const ELECTRON = path.join(base, 'electron', 'electron.exe');
@@ -56,6 +64,43 @@ const PORT = 3080;
 const PROBE_MS = 14000;  // total time to look for a window before falling back
 const POLL_MS = 500;
 const HOLD_MS = 1500;    // how long a window must stay up before we call it success
+
+// --- who are we? -----------------------------------------------------------
+//
+// Every check below must identify OUR OWN processes, never "any electron.exe".
+//
+// WHY: DSH itself runs on Electron (C:\Users\<u>\.dsh\electron\electron.exe), so on
+// a machine where DSH is open there are always several electron.exe processes that
+// have nothing to do with this pet. Matching by image name alone made the launcher
+// refuse to start ("already running") whenever DSH was open, and would also have
+// made the window probe declare success on DSH's window. Both checks now compare
+// the executable path against this package's own electron directory.
+//
+// The path prefix is normalised (backslashes, lower case) because WMI returns the
+// path exactly as Windows stored it, which can differ in case from ours.
+const SELF_ELECTRON_DIR = path.join(base, 'electron').toLowerCase();
+const SELF_EXE_NAME = path.basename(process.execPath);   // e.g. 大肥鱼桌宠.exe
+
+/**
+ * Count OUR electron.exe processes (optionally only those with a visible window).
+ *
+ * Implemented via one WMI query per call, filtered on ExecutablePath. We avoid
+ * `tasklist /FI "IMAGENAME eq electron.exe"` because that matches the whole system.
+ */
+function ownElectronCount(requireWindow) {
+  const filter = "(Get-CimInstance Win32_Process -Filter \"Name='electron.exe'\" -ErrorAction SilentlyContinue | " +
+    "Where-Object { $_.ExecutablePath -and $_.ExecutablePath.ToLower().StartsWith('" +
+    SELF_ELECTRON_DIR.replace(/'/g, "''") + "') }" +
+    (requireWindow ? " | Where-Object { (Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue).MainWindowHandle -ne 0 }" : '') +
+    ' | Measure-Object).Count';
+  try {
+    const out = execFileSync('powershell.exe', ['-NoProfile', '-Command', filter],
+      { encoding: 'utf8', timeout: 6000 });
+    return parseInt(String(out).trim(), 10) || 0;
+  } catch {
+    return -1;   // probe failed: caller decides (never treat as "one exists")
+  }
+}
 
 function say(msg) {
   process.stderr.write('[dsh-pet] ' + msg + '\n');
@@ -76,14 +121,62 @@ process.env.DSH_HOME = HOME;
 delete process.env.ELECTRON_RUN_AS_NODE;
 fs.mkdirSync(HOME, { recursive: true });
 
-// --- single instance -------------------------------------------------------
-function electronRunning() {
+/**
+ * Terminate only OUR electron.exe processes (path-filtered).
+ *
+ * Used by the --no-sandbox retry: the first attempt may have left a half-started
+ * window behind. Must never touch other Electron applications on the machine.
+ */
+function killOwnElectrons() {
+  const filter = "(Get-CimInstance Win32_Process -Filter \"Name='electron.exe'\" -ErrorAction SilentlyContinue | " +
+    "Where-Object { $_.ExecutablePath -and $_.ExecutablePath.ToLower().StartsWith('" +
+    SELF_ELECTRON_DIR.replace(/'/g, "''") + "') }).ProcessId";
   try {
-    const r = spawnSync('tasklist', ['/FI', 'IMAGENAME eq electron.exe', '/NH'], { encoding: 'utf8' });
-    return /electron\.exe/i.test(r.stdout || '');
-  } catch { return false; }
+    const out = execFileSync('powershell.exe', ['-NoProfile', '-Command', filter],
+      { encoding: 'utf8', timeout: 8000 });
+    const pids = String(out).split(/\s+/).map((s) => parseInt(s, 10)).filter((n) => Number.isInteger(n) && n > 0);
+    for (const pid of pids) {
+      try { execFileSync('taskkill', ['/PID', String(pid), '/F'], { stdio: 'ignore', timeout: 4000 }); } catch {}
+    }
+    if (pids.length) say('stopped ' + pids.length + ' of our own electron process(es) before retry');
+  } catch { /* best effort */ }
 }
-if (electronRunning()) die('already running - no second copy was started.');
+
+// --- single instance -------------------------------------------------------
+//
+// Only OUR electron counts. DSH's Electron (or any other Electron app) must not
+// block the pet: they are unrelated processes that happen to share an image name.
+//
+// Two ways a copy can already exist:
+//   1. the packaged exe is running twice  -> detect by our own image name
+//   2. an older copy left only its electron window (launcher already exited)
+//                                         -> detect by path-filtered electron query
+//
+// Step 1 is skipped when running under node (development): there process.execPath
+// is node.exe, and "another node.exe is running" says nothing about the pet.
+function alreadyRunning() {
+  const isPackaged = /\.exe$/i.test(SELF_EXE_NAME) && !/^node\.exe$/i.test(SELF_EXE_NAME);
+
+  if (isPackaged) {
+    try {
+      const r = spawnSync('tasklist', ['/FI', 'IMAGENAME eq ' + SELF_EXE_NAME, '/NH'], { encoding: 'utf8' });
+      const lines = String(r.stdout || '').split('\n')
+        .filter((l) => l.toLowerCase().includes(SELF_EXE_NAME.toLowerCase()));
+      // Exclude ourselves: tasklist lists our own PID too.
+      const others = lines.filter((l) => !new RegExp('(^|\\s)' + process.pid + '(\\s|$)').test(l));
+      if (others.length > 0) return 'another ' + SELF_EXE_NAME + ' is already running';
+    } catch { /* fall through to the electron check */ }
+  }
+
+  // A previously launched copy whose launcher already exited but whose electron
+  // window is still up (orphan). Path-filtered, so DSH is not counted.
+  const n = ownElectronCount(false);
+  if (n > 0) return 'the pet window is already open (' + n + ' electron process(es) under ' + path.join(base, 'electron') + ')';
+  return null;   // n === 0 or -1 (probe failed) -> allow start
+}
+
+const running = alreadyRunning();
+if (running) die('already running - no second copy was started. (' + running + ')');
 
 // --- sandbox patch ---------------------------------------------------------
 // Idempotent and reversible. Refuses to act if the host code no longer matches,
@@ -119,11 +212,33 @@ function setNoSandbox(on) {
 }
 
 // --- probing ---------------------------------------------------------------
+//
+// The host's /health returns { name, plugin: { root }, port, uptimeSec }. We must
+// verify plugin.root points at THIS package before believing the answer:
+//   - the host auto-advances the port when 3080 is taken, so asking for 3080 may
+//     reach a different instance entirely;
+//   - if another dsh-pet (e.g. the DSH plugin's standalone) happens to hold 3080,
+//     a bare status check would report "host is up" for a process we never started.
+// Treating that as success would make the launcher skip the --no-sandbox fallback
+// even though our own host never came up.
 function hostAnswers() {
   return new Promise((resolve) => {
     const req = http.get({ host: '127.0.0.1', port: PORT, path: '/health', timeout: 700 }, (res) => {
-      res.resume();
-      resolve(res.statusCode < 500);
+      if (res.statusCode >= 500) { res.resume(); resolve(false); return; }
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => { if (body.length < 4096) body += c; });
+      res.on('end', () => {
+        try {
+          const j = JSON.parse(body);
+          const root = j && j.plugin && j.plugin.root;
+          if (!root) { resolve(false); return; }
+          // Compare normalised paths: the host reports its app/ dir.
+          const exp = path.join(base, 'app').toLowerCase();
+          const got = String(root).replace(/\//g, '\\').toLowerCase();
+          resolve(got === exp);
+        } catch { resolve(false); }
+      });
     });
     req.on('error', () => resolve(false));
     req.on('timeout', () => { req.destroy(); resolve(false); });
@@ -138,19 +253,16 @@ function hostAnswers() {
 //   - one process per probe, but only every WINDOW_POLL_MS (default 1s), and
 //   - the window must still be there on a SECOND, later probe, so a window that
 //     appears and immediately dies is not mistaken for success.
+//
+// The probe only counts OUR electron (path-filtered). Counting every electron.exe
+// with a window would see DSH's window and report success immediately.
 const WINDOW_POLL_MS = 1000;
 let lastWindowSeenAt = 0;
 
 function windowVisible() {
   const now = Date.now();
   if (now - lastWindowSeenAt < WINDOW_POLL_MS) return true;   // confirmed recently
-  try {
-    const out = execFileSync('powershell.exe', ['-NoProfile', '-Command',
-      "(Get-Process -Name electron -ErrorAction SilentlyContinue | " +
-      "Where-Object { $_.MainWindowHandle -ne 0 } | Measure-Object).Count"
-    ], { encoding: 'utf8', timeout: 4000 });
-    if (parseInt(String(out).trim(), 10) > 0) { lastWindowSeenAt = now; return true; }
-  } catch { /* treat a failed probe as "no window yet" */ }
+  if (ownElectronCount(true) > 0) { lastWindowSeenAt = now; return true; }
   return false;
 }
 
@@ -208,7 +320,11 @@ async function waitForWindow() {
       (await hostAnswers() ? ' (host was up, so the window itself never appeared)' : ' (host never answered either)'));
   if (child && !child.killed) { try { child.kill(); } catch {} }
   await sleep(1200);
-  try { execFileSync('taskkill', ['/IM', 'electron.exe', '/F'], { stdio: 'ignore' }); } catch {}
+  // Kill only OUR electron processes before retrying. The old code ran
+  // `taskkill /IM electron.exe /F`, which also terminated DSH's Electron windows on
+  // the same machine — a fallback meant to rescue this pet must never take down an
+  // unrelated application.
+  killOwnElectrons();
 
   if (!setNoSandbox(true)) return;
   startHost();
