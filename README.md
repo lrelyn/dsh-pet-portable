@@ -9,10 +9,13 @@
 **[→ 去 Releases 下载完整安装包](https://github.com/lrelyn/dsh-pet-portable/releases/latest)**
 
 ```powershell
-# 1. 下载 dsh-pet-portable-<版本>-win64.zip（约 372 MB）
+# 1. 在 Releases 页面下载那个 .zip（约 415 MB，文件名带版本号和时间戳）
 # 2. 解压到任意位置（桌面、D 盘、U 盘都行）
 # 3. 双击 大肥鱼桌宠.exe
 ```
+
+> 附件名形如 `-v0.5.0-20261024-1737.zip`——前面的中文在 GitHub 上传时被截掉了，
+> 不影响内容。认准版本号和时间戳即可。
 
 | 项 | 要求 |
 |---|---|
@@ -199,7 +202,7 @@ dsh-pet-portable/
 
 **所以本仓库 clone 下来不能直接运行**，需要补齐运行时和素材。完整步骤见 [my-life-archive 的恢复清单](https://github.com/lrelyn/my-life-archive/blob/main/notes/dsh-pet-restore.md)。
 
-> **只是想像普通用户一样用？** 别折腾这些 —— 直接去 [Releases](https://github.com/lrelyn/dsh-pet-portable/releases/latest) 下打包好的完整版（约 372 MB），解压双击就能跑。
+> **只是想像普通用户一样用？** 别折腾这些 —— 直接去 [Releases](https://github.com/lrelyn/dsh-pet-portable/releases/latest) 下打包好的完整版（约 415 MB），解压双击就能跑。
 
 ## 自己造动作
 
