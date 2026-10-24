@@ -38,10 +38,16 @@
 *.bak-*
 *.before-*
 
-# ---------- 旧遗留配置 ----------
-# data/dsh-pet/ 是**旧遗留**：真正生效的配置在 $DSH_HOME/dsh-pet/（见 config/README.md）。
-# 保留它进版本控制只会误导后人以为改这里有用。已在 config/ 里放了正确的那份快照。
-/data/
+# ---------- 运行时数据 ----------
+# 注意：data/dsh-pet/ 对**便携版**是真正生效的配置目录！
+#   launcher.js 会设 DSH_HOME = <包根>/data，所以便携版读 data/dsh-pet/main-config.jsonc；
+#   只有从 ~/.dsh 启动的 DSH 插件模式才读 ~/.dsh/dsh-pet/。
+# 因此：main-config.jsonc 要进版本控制（否则 Released 包里的配置是旧的），
+# 但 memory.json 是运行时产物、且含对话内容，必须排除。
+/data/dsh-pet/memory.json
+/data/dsh-pet/memory.json.*
+/data/dsh-pet/*.bak-*
+/data/dsh-pet/*.before-*
 
 # ---------- 日志 / 临时 ----------
 *.log
@@ -70,8 +76,6 @@ __pycache__/
 *.pyc
 
 # ---------- 运行时数据 ----------
-/data/dsh-pet/memory.json
-/data/dsh-pet/memory.json.*
 
 # ---------- SEA 打包中间产物 ----------
 sea-prep.blob
