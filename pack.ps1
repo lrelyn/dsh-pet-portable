@@ -79,7 +79,8 @@ $excludeFilePatterns = @(
   'sea-prep.blob',     # SEA 打包中间产物
   '*.exe.old',
   'dbg-*',             # 调试残留
-  '*.tmp'
+  '*.tmp',
+  'memory.json'        # 运行时产物（对话记忆 + 心情存档），不该随包发布
 )
 
 # --- 预检：必需文件是否在位 ---
