@@ -309,6 +309,11 @@ class PetSprite {
     // （categories 原样返回、event/tick 恒 null），所以下面无条件创建、无条件调用。
     this.mood = new S.MoodState(pet.moods || config.moods);
     this.moodLastTick = 0; // 上一次 tick 的 Date.now()（0 = 未 tick；首拍只记基线）
+    // 上次用户交互时间（点击/拖拽/投喂/菜单）。用于「被忽视」惩罚：
+    // 超过 NEGLECT_AFTER_MS 没交互，tick 里额外扣心情。
+    this.lastInteractionAt = Date.now();
+    this.moodSaveAt = 0;   // 上次落盘时间（节流：最多每 30 秒写一次，避免频繁 IO）
+    this.moodRestored = false; // 是否已从磁盘恢复过（只恢复一次）
     // 分部位触摸：同部位连点计数（换部位/超 3s 归零）。递进语义见 shared-core 的 touch 模块。
     this.touchStreak = { zone: '', n: 0, at: 0 };
     // 拖拽抛掷物理参数（顶层全局；拍平已吹入实例，兜底回全局/默认）
@@ -331,6 +336,10 @@ class PetSprite {
       mood: this.mood.current,
       value: Number(this.mood.value0.toFixed(1)),
     });
+    // 启动时从 data/memory.json 恢复上次的心情值（P1-4）。
+    // 不 await —— 恢复是异步的，不该阻塞宠物首次渲染；
+    // 失败（首次运行/文件损坏）静默保持基准值 50。
+    this.moodRestore();
     // 交互/移动
     this.dragState = { active: false, dragging: false, sx: 0, sy: 0, petX: 0, petY: 0 };
     this.justDragged = false;
@@ -776,6 +785,18 @@ class PetSprite {
     this.anim = PET_FEED_ANIM;
     this.once = true;
     this.switchTo(PET_FEED_ANIM, true);
+    // 投喂接入心情（原来台词说"心情 +1"但代码里根本没调 mood.event，
+    // 用户投喂后心情条毫无变化——这是最直观的逻辑断裂）。
+    // 放在 switchTo 之后：先让动画播起来，再更新心情，避免档位切换的 cue 抢掉投喂动画。
+    this.lastInteractionAt = now;
+    const feedMood = this.mood.event('feed');
+    if (feedMood) {
+      // 只更新徽标，不播 cue（投喂动画本身已经是反馈，再插一段引导动画会打断它）
+      this.renderMood();
+      this.moodSaveThrottled();
+    } else {
+      this.renderMood();
+    }
     const line = PET_FEED_LINES[Math.floor(Math.random() * PET_FEED_LINES.length)];
     // 台词走宿主的 /broadcast（它内部 decideBroadcast 后 writePet("say")），
     // 因此和碎碎念/对话共用同一个气泡槽、同一套优先级与自动消失计时。
@@ -841,6 +862,11 @@ class PetSprite {
     this.stopMove();
     this.stopThrow && this.stopThrow();
     console.info("[dsh-pet] dozing off");
+    // 入睡扣一点心情（-5）：困了本身就是低能量状态。
+    // 不播 cue —— 正要播睡觉动画，插引导动画会把睡姿顶掉。
+    this.mood.event('sleep');
+    this.renderMood();
+    this.moodSaveThrottled();
     // once=true: 整段播完, 由 onended 接力到循环段
     this.anim = PET_SLEEP_IN;
     this.once = true;
@@ -901,6 +927,10 @@ class PetSprite {
     // 随机链/碎碎念/工作状态都被挡住；handleEnded 里播完才清。
     this.PET_SLEEP_Waking = true;
     this.switchTo(PET_SLEEP_WAKE, true);
+    // 醒来 +3（睡饱了心情好一点）。不播 cue —— 正在播醒来动画。
+    this.mood.event('wake');
+    this.renderMood();
+    this.moodSaveThrottled();
   }
 
   /** 跳过醒来动画：立刻脱离睡眠态，回随机链（不播任何过渡）。 */
@@ -953,7 +983,9 @@ class PetSprite {
     const k = S.rollKind(roll, animationWeights, { fixed: this.pet.fixedEnabled });
     let next;
     if (k === 'idle') {
-      next = S.pick(animations.idle, this.anim);
+      // 心情替换 idle 池（P1-1）：开心时多蹦跶、困倦时多打哈欠。
+      // moodPoolOrNull 已过滤掉不存在的素材；null = 该档没配 → 用原池。
+      next = S.pick(this.moodPoolOrNull('idle') || animations.idle, this.anim);
     } else if (k === 'turn') {
       next = S.pick(animations.turn, this.anim);
     } else if (k === 'move') {
@@ -991,6 +1023,62 @@ class PetSprite {
     console.log('[dsh-pet] pet=' + this.pet.id + ' 心情切档 -> ' + to +
       ' (v=' + this.mood.value0.toFixed(1) + ') 引导动画 ' + name);
     this.playOnce(name);
+  }
+
+  /**
+   * 按当前心情取 idle / clicks 的替代池（P1-1 / P1-2）。
+   * 返回 null = 该档没配、调用方用原池（`mood.pool()` 关闭时恒为空数组）。
+   *
+   * 为什么要这个：分类权重倍率是**概率性**变化（玩耍 20%→32%），用户不一定察觉。
+   * 直接替换 idle/clicks 这类高频池，心情的影响才明显。
+   * 池里的动画名会先过 hasAnim 过滤——配置里写了不存在的素材也不会 404。
+   */
+  moodPoolOrNull(which) {
+    const pool = this.mood.pool(which);
+    if (pool.length === 0) return null;
+    const usable = pool.filter((n) => this.hasAnim(n));
+    return usable.length ? usable : null;
+  }
+
+  /**
+   * 心情持久化：节流写入（默认 30 秒最多一次）。
+   * 为什么节流：心情每次 tick/事件都想存，但 handleEnded 触发很频繁，
+   * 不节流会造成大量小文件写入（桌宠长期挂着时很明显）。
+   */
+  moodSaveThrottled(force) {
+    const now = Date.now();
+    if (!force && now - this.moodSaveAt < 30000) return;
+    this.moodSaveAt = now;
+    this.moodSave();
+  }
+
+  /** 把当前心情写到 data/memory.json（与宿主的对话记忆同文件，只加 mood 键）。
+   *  走 preload 暴露的 petBridge.saveMood → 主进程 ipcMain 'pet:save-mood'
+   *  （渲染进程 contextIsolation，没有 fs 权限）。 */
+  moodSave() {
+    const v = this.mood.snapshot();
+    if (v === null) return; // 心情系统关闭 → 不写盘
+    const bridge = window.petBridge;
+    if (!bridge || typeof bridge.saveMood !== 'function') return; // DSH 宿主模式没有这个通道
+    bridge.saveMood(Math.round(v * 10) / 10).catch(() => {});
+  }
+
+  /** 启动时从 memory.json 恢复心情（只恢复一次；失败静默保持基准值）。 */
+  async moodRestore() {
+    if (this.moodRestored) return;
+    this.moodRestored = true;
+    if (!this.mood.enabled) return;
+    const bridge = window.petBridge;
+    if (!bridge || typeof bridge.loadMood !== 'function') return;
+    try {
+      const r = await bridge.loadMood();
+      if (r && r.ok && typeof r.mood === 'number') {
+        this.mood.restore(r.mood);
+        this.renderMood();
+        console.log('[dsh-pet] 恢复心情 ' + r.mood.toFixed(1) +
+          (r.updatedAt ? '（存档于 ' + new Date(r.updatedAt).toLocaleString() + '）' : ''));
+      }
+    } catch { /* 首次运行没有存档，正常 */ }
   }
 
   /** 心情徽标文案表（emoji + 中文档名；normal 不显示档名，只留 emoji + 数值，减少常驻干扰） */
@@ -1042,8 +1130,12 @@ class PetSprite {
     // hour 决定回归目标——夜里越待越困，白天自然回暖（与浏览器 pet.ts 同一语义）。
     const nowMs = Date.now();
     if (this.moodLastTick > 0) {
-      const to = this.mood.tick((nowMs - this.moodLastTick) / 1000, new Date().getHours());
+      // 第三参数 idleMs = 距上次用户交互多久，超过 5 分钟开始扣心情（"被忽视"惩罚）。
+      // 原来心情只由事件驱动，用户不理它时恒定不变——桌宠不会因被冷落而低落。
+      const idleMs = this.lastInteractionAt ? nowMs - this.lastInteractionAt : 0;
+      const to = this.mood.tick((nowMs - this.moodLastTick) / 1000, new Date().getHours(), idleMs);
       if (to) this.moodCue(to);
+      this.moodSaveThrottled();
     }
     this.moodLastTick = nowMs;
     this.renderMood();
@@ -1659,9 +1751,11 @@ class PetSprite {
     this.PET_SLEEP_Touch();
     // 心情：被拎起来它不高兴（-4）。写在 pointerdown 而不是松手：拎一下就该不高兴，
     // 而不是等甩出去才算；且 pointerdown 每次抓起都会走到，不会漏掉"只是拎着没甩"。
+    this.lastInteractionAt = Date.now();
     const grabMood = this.mood.event('throwDrag');
     if (grabMood) this.moodCue(grabMood);
     this.renderMood();
+    this.moodSaveThrottled();
     // 只认左键：右键进入拖拽判定会与右键菜单打架（右键不拖拽，两端一致）
     if (e.button !== 0) return;
     // 抓取速度日志：stopThrow 之前读，否则飞行速度就没了；静止时记录 0（与浏览器同构）
@@ -1910,9 +2004,11 @@ class PetSprite {
     this.stopMove();
     // 心情：点击 = 逗它（最频繁的开心来源）。跨档时才播引导动画，
     // 连续点也不会每下都打断当前动作刷存在感（与浏览器 pet.ts 同一语义）。
+    this.lastInteractionAt = Date.now();
     const clickMood = this.mood.event('click');
     if (clickMood) this.moodCue(clickMood);
     this.renderMood();
+    this.moodSaveThrottled();
 
     // ---- 分部位触摸：点击处的纵向比例 → 部位 → 该部位的池（与浏览器同一份逻辑）----
     // ry 归一化到**命中区内部**（0=区顶 1=区底）。命中区是 this.hit 这个 div，
@@ -1930,7 +2026,15 @@ class PetSprite {
     st.zone = zone;
     st.at = now;
 
-    const name = S.decideTouch({ zone, anims: this.animations, streak: st.n, current: this.anim });
+    // 分部位触摸的池取用：如果当前心情档配了 clicks 替代池，就整体替换 clicks
+    // （分部位池 clicksHead/Body/Feet 优先级高于 clicks，见 shared/touch.ts 的 poolForZone）。
+    // 这样"开心时被点更开心 / 烦躁时被点更烦"才会在高频点击里体现（P1-2）。
+    // 心情池为空 → 原样用 this.animations（等价原行为）。
+    const moodClicks = this.moodPoolOrNull('clicks');
+    const animsForTouch = moodClicks
+      ? { ...this.animations, clicks: moodClicks, clicksHead: [], clicksBody: [], clicksFeet: [] }
+      : this.animations;
+    const name = S.decideTouch({ zone, anims: animsForTouch, streak: st.n, current: this.anim });
     if (!name) return; // 这个宠物没有任何点击动画
     console.error(
       '[dsh-pet] pet=' + this.pet.id + ' -> [' + S.ZONE_LABEL[zone] + (st.n > 1 ? ' ×' + st.n : '') + '] ' + name,

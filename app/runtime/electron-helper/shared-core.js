@@ -83,29 +83,40 @@ const isNightHour = (hour) => NIGHT_HOURS.has(hour);
 const restValue = (hour) => isNightHour(hour) ? NIGHT_REST : DAY_REST;
 const MOOD_EVENTS = {
 	click: 6,
+	feed: 8,
+	throwDrag: -4,
 	workSuccess: 12,
-	balanceRich: 8,
 	workError: -15,
+	balanceRich: 8,
 	balanceLow: -12,
-	throwDrag: -4
+	sleep: -5,
+	wake: 3
 };
+const NEGLECT_AFTER_MS = 5 * 60 * 1000;
+const NEGLECT_RATE_PER_MIN = 0.5;
 const DEFAULT_MOOD_CONFIG = {
 	enabled: false,
-	decayPerSec: 0.05,
-	thresholds: { happy: 62, tired: 38, grumpy: 24 },
+	decayPerSec: 0.005,
+	thresholds: { happy: 60, tired: 40, grumpy: 25 },
 	specs: {
 		happy: {
-			weights: { "玩耍": 1.6, "小动作": 1.3, "吃什么": 1.1, "时节": 0.9, "文字": 0.6 },
-			anims: ["点击回应-开心跃动", "点击回应-元气挥手", "蓝鲸现世"]
+			weights: { "玩耍": 1.8, "小动作": 1.4, "吃什么": 1.2, "时节": 0.8, "文字": 0.5 },
+			anims: ["点击回应-开心跃动", "点击回应-元气挥手", "蓝鲸现世"],
+			idle: ["待机呼吸休闲", "可爱宅舞", "轻快摇摆舞", "原地漂浮踏步", "悠闲哼歌"],
+			clicks: ["点击回应-开心跃动", "点击回应-元气挥手", "点击回应-挠痒咯咯笑"]
 		},
 		normal: { weights: {} },
 		tired: {
-			weights: { "小动作": 1.5, "文字": 1.2, "吃什么": 1.0, "玩耍": 0.4, "时节": 0.5 },
-			anims: ["哈欠连天", "迷糊犯困", "睡眼惺忪"]
+			weights: { "小动作": 1.6, "文字": 1.3, "吃什么": 0.9, "玩耍": 0.3, "时节": 0.4 },
+			anims: ["哈欠连天", "迷糊犯困", "睡眼惺忪"],
+			idle: ["哈欠连天", "迷糊犯困", "睡眼惺忪", "原地小憩沉眠", "待机呼吸休闲"],
+			clicks: ["点击回应-害羞惊讶", "点击回应-傲娇生气", "打喷嚏"]
 		},
 		grumpy: {
-			weights: { "小动作": 1.2, "玩耍": 0.3, "吃什么": 0.4, "时节": 0.3, "文字": 1.0 },
-			anims: ["看表叹气", "玩游戏气急败坏", "摸鱼被抓"]
+			weights: { "小动作": 1.3, "玩耍": 0.2, "吃什么": 0.3, "时节": 0.2, "文字": 1.2 },
+			anims: ["看表叹气", "玩游戏气急败坏", "摸鱼被抓"],
+			idle: ["看表叹气", "长时间工作看表", "打瞌睡被惊醒", "待机呼吸休闲"],
+			clicks: ["点击回应-傲娇生气", "被吓一跳（炸毛）", "打喷嚏"]
 		}
 	}
 };
@@ -116,10 +127,14 @@ const moodOf = (value, t) => {
 	if (value >= t.happy) return "happy";
 	return "normal";
 };
-const applyEvent = (value, event) => {
+const applyEvent = (value, event, t) => {
 	const delta = MOOD_EVENTS[event];
 	if (delta === void 0) return value;
-	return clampMood(value + delta);
+	let effective = delta;
+	if (t !== void 0 && delta > 0 && moodOf(value, t) === "grumpy") {
+		effective = delta / 2;
+	}
+	return clampMood(value + effective);
 };
 const decayValue = (value, decayPerSec, dt, target = DAY_REST) => {
 	if (decayPerSec <= 0 || dt <= 0) return value;
@@ -146,6 +161,11 @@ const moodAnims = (mood, cfg) => {
 	if (!spec || mood === "normal") return [];
 	return spec.anims ?? [];
 };
+const moodPool = (mood, which, cfg) => {
+	const spec = cfg.specs?.[mood];
+	if (!spec || mood === "normal") return [];
+	return spec[which] ?? [];
+};
 class MoodState {
 	constructor(cfg) {
 		this.cfg = cfg ?? DEFAULT_MOOD_CONFIG;
@@ -165,6 +185,10 @@ class MoodState {
 		if (!this.enabled) return categories;
 		return applyMoodFactors(categories, this.key, this.cfg);
 	}
+	pool(which) {
+		if (!this.enabled) return [];
+		return moodPool(this.key, which, this.cfg);
+	}
 	cue() {
 		if (!this.enabled) return null;
 		const anims = moodAnims(this.key, this.cfg);
@@ -173,13 +197,26 @@ class MoodState {
 	}
 	event(name) {
 		if (!this.enabled) return null;
-		this.value = applyEvent(this.value, name);
+		this.value = applyEvent(this.value, name, this.cfg.thresholds);
 		return this.sync();
 	}
-	tick(dt, hour) {
+	tick(dt, hour, idleMs) {
 		if (!this.enabled) return null;
 		this.value = decayValue(this.value, this.cfg.decayPerSec, dt, restValue(hour));
+		if (idleMs !== void 0 && idleMs > NEGLECT_AFTER_MS && dt > 0) {
+			const penalty = NEGLECT_RATE_PER_MIN * (dt / 60);
+			this.value = Math.max(0, this.value - penalty);
+		}
 		return this.sync();
+	}
+	restore(value) {
+		if (!this.enabled) return;
+		if (typeof value !== "number" || !Number.isFinite(value)) return;
+		this.value = Math.max(0, Math.min(100, value));
+		this.key = moodOf(this.value, this.cfg.thresholds);
+	}
+	snapshot() {
+		return this.enabled ? this.value : null;
 	}
 	sync() {
 		const next = moodOf(this.value, this.cfg.thresholds);
@@ -1771,6 +1808,9 @@ exports.restValue = restValue
 exports.DEFAULT_MOOD_CONFIG = DEFAULT_MOOD_CONFIG
 exports.MOOD_BASE = MOOD_BASE
 exports.MOOD_EVENTS = MOOD_EVENTS
+exports.moodPool = moodPool
+exports.NEGLECT_AFTER_MS = NEGLECT_AFTER_MS
+exports.NEGLECT_RATE_PER_MIN = NEGLECT_RATE_PER_MIN
 exports.NIGHT_REST = NIGHT_REST
 exports.DAY_REST = DAY_REST
 exports.mountChatDialog = mountChatDialog

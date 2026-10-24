@@ -75,6 +75,16 @@ contextBridge.exposeInMainWorld('petBridge', {
   getAutoStart() {
     return ipcRenderer.invoke('pet:get-autostart');
   },
+  // ---- 心情持久化（P1-4）----
+  // 渲染进程没有文件系统权限（contextIsolation），所以走主进程读写
+  // data/memory.json。用 invoke 是为了让调用方能 await 到结果。
+  // 只存 { mood, updatedAt }，与宿主的对话记忆同文件但不同键，互不干扰。
+  loadMood() {
+    return ipcRenderer.invoke('pet:load-mood');
+  },
+  saveMood(mood) {
+    return ipcRenderer.invoke('pet:save-mood', { mood });
+  },
   // 退出桌宠：关掉宿主(node)与宠物窗口，主进程随后自行退出。
   quitPet() {
     ipcRenderer.send('pet:quit');

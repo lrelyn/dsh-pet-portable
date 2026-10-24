@@ -26,6 +26,13 @@ export interface MoodSpec {
   /** 进入该档位时优先播放的动画池（可空；只在**切换**的那一次用，避免一直霸屏）。
    *  动画名必须存在于该宠物的素材目录，否则静默不播（与菜单/配置的宽容口径一致）。 */
   anims?: string[];
+  /** 该档位下 **idle 待机池** 的候选（可空）。传了就用它替代原 idle 池——
+   *  这是「开心时多蹦跶、困倦时多打哈欠」的实现方式（P1-1）。
+   *  池里的动画名必须真实存在，缺失的会被调用方静默跳过。 */
+  idle?: string[];
+  /** 该档位下 **点击回应池** 的候选（可空）。传了就用它替代原 clicks 池——
+   *  「开心时被点更开心，生气时被点会烦躁」（P1-2）。 */
+  clicks?: string[];
 }
 
 /** 心情档位阈值（value → key）：>=happy 线判开心，<=tired 线判疲倦，<=grumpy 线判烦躁 */
@@ -53,21 +60,39 @@ export interface MoodConfig {
 /** 内置默认（与 assets/config.jsonc 的 moods 段保持一致） */
 export const DEFAULT_MOOD_CONFIG: MoodConfig = {
   enabled: false, // 默认关闭：不写配置就完全等价原行为
-  decayPerSec: 0.05, // 时间常数 20s：约一分钟从极端心情回到基准
-  thresholds: { happy: 62, tired: 38, grumpy: 24 },
+  // 时间常数约 3 分钟（0.005/s）。原先是 0.05/s（20 秒），太快——
+  // 用户点一下让它开心，去倒杯水回来就恢复平静了，完全感知不到心情趋势。
+  // 改慢 10 倍后开心能维持十几分钟，有"趋势感"（参照 VPet/拓麻歌子是小时级，
+  // 但桌宠场景下 3 分钟时间常数已足够，太快或太慢都不自然）。
+  decayPerSec: 0.005,
+  // 阈值收窄：normal 从 39 个分值点缩到 19 个（41~59），更容易跨档。
+  // 原来的 62/38/24 配合 +6 的点击偏移，要连点 4 次才到 happy，用户感知不到。
+  thresholds: { happy: 60, tired: 40, grumpy: 25 },
   specs: {
     happy: {
-      weights: { 玩耍: 1.6, 小动作: 1.3, 吃什么: 1.1, 时节: 0.9, 文字: 0.6 },
+      weights: { 玩耍: 1.8, 小动作: 1.4, 吃什么: 1.2, 时节: 0.8, 文字: 0.5 },
       anims: ['点击回应-开心跃动', '点击回应-元气挥手', '蓝鲸现世'],
+      // 开心时待机更活跃（P1-1）
+      idle: ['待机呼吸休闲', '可爱宅舞', '轻快摇摆舞', '原地漂浮踏步', '悠闲哼歌'],
+      // 开心时被点更开心（P1-2）
+      clicks: ['点击回应-开心跃动', '点击回应-元气挥手', '点击回应-挠痒咯咯笑'],
     },
     normal: { weights: {} },
     tired: {
-      weights: { 小动作: 1.5, 文字: 1.2, 吃什么: 1.0, 玩耍: 0.4, 时节: 0.5 },
+      weights: { 小动作: 1.6, 文字: 1.3, 吃什么: 0.9, 玩耍: 0.3, 时节: 0.4 },
       anims: ['哈欠连天', '迷糊犯困', '睡眼惺忪'],
+      // 困倦时待机多打哈欠、少动弹（P1-1）
+      idle: ['哈欠连天', '迷糊犯困', '睡眼惺忪', '原地小憩沉眠', '待机呼吸休闲'],
+      // 困倦时被点反应迟钝（P1-2）
+      clicks: ['点击回应-害羞惊讶', '点击回应-傲娇生气', '打喷嚏'],
     },
     grumpy: {
-      weights: { 小动作: 1.2, 玩耍: 0.3, 吃什么: 0.4, 时节: 0.3, 文字: 1.0 },
+      weights: { 小动作: 1.3, 玩耍: 0.2, 吃什么: 0.3, 时节: 0.2, 文字: 1.2 },
       anims: ['看表叹气', '玩游戏气急败坏', '摸鱼被抓'],
+      // 烦躁时待机也不耐烦（P1-1）
+      idle: ['看表叹气', '长时间工作看表', '打瞌睡被惊醒', '待机呼吸休闲'],
+      // 烦躁时被点会更烦（P1-2，配合「烦躁时正收益减半」）
+      clicks: ['点击回应-傲娇生气', '被吓一跳（炸毛）', '打喷嚏'],
     },
   },
 };
@@ -78,13 +103,28 @@ export const MOOD_BASE = 50;
 /** 事件 → 心情偏移。**语义固定的业务规则**（与 workStatusTexts 的档位一样属于代码契约）：
  *  改这些数字等于改"什么算开心/什么算难过"，不是表现层参数，所以不放配置。 */
 export const MOOD_EVENTS: Record<string, number> = {
+  // —— 日常互动 ——
   click: 6, // 点击互动（逗它）
-  workSuccess: 12, // 工作状态 success
-  balanceRich: 8, // 余额 >= 80%（钱袋满溢）
-  workError: -15, // 工作状态 error
-  balanceLow: -12, // 余额 < 20%（袋空如洗）
+  feed: 8, // 投喂小鱼干（此前台词说"心情 +1"但没有实际偏移，是最明显的逻辑断裂）
   throwDrag: -4, // 被拖拽抛掷（它不喜欢被甩）
+  // —— 工作状态（依赖 DSH 宿主，独立版基本不触发）——
+  workSuccess: 12, // 工作状态 success
+  workError: -15, // 工作状态 error
+  // —— 余额 ——
+  balanceRich: 8, // 余额 >= 80%（钱袋满溢）
+  balanceLow: -12, // 余额 < 20%（袋空如洗）
+  // —— 作息 ——
+  sleep: -5, // 进入睡眠（她困了，心情略微下沉）
+  wake: 3, // 醒来（睡饱了心情好一点）
 };
+
+/** 「被忽视」惩罚：超过这个时长没交互，每 tick 额外扣心情。
+ *  为什么要它：原来的心情只有"事件驱动"——用户不理它时心情恒定不变，
+ *  桌宠不会因为被冷落而低落，缺少"需要陪伴"的驱动力。
+ *  参照经典电子鸡：长时间不互动 → 孤独 → 生病。 */
+export const NEGLECT_AFTER_MS = 5 * 60 * 1000; // 5 分钟
+/** 被忽视时每分钟扣多少心情（-0.5/分钟，10 分钟才 -5，不激进） */
+export const NEGLECT_RATE_PER_MIN = 0.5;
 
 /** 深夜的回归目标：夜里待机越久越往疲倦漂（见文件头注释） */
 export const NIGHT_REST = 30;
@@ -112,11 +152,22 @@ export const moodOf = (value: number, t: MoodThresholds): MoodKey => {
   return 'normal';
 };
 
-/** 一次事件写入后的新值（事件名未知 → 原值不变，不抛） */
-export const applyEvent = (value: number, event: string): number => {
+/** 一次事件写入后的新值（事件名未知 → 原值不变，不抛）。
+ *
+ *  `t` 可选：传了就启用「烦躁时被点会更烦」——
+ *  已经在 grumpy 档时，正收益的互动（click/feed）只有一半效果。
+ *  为什么要它：原来 grumpy 状态下点它还是 +6，点几下就把它点回 normal 了，
+ *  情绪状态形同虚设。半衰后它需要更多耐心才能哄好，负面情绪才有存在感。
+ *  负收益事件（workError 等）不受影响（已经很糟了，不该再打折）。
+ */
+export const applyEvent = (value: number, event: string, t?: MoodThresholds): number => {
   const delta = MOOD_EVENTS[event];
   if (delta === undefined) return value;
-  return clamp(value + delta);
+  let effective = delta;
+  if (t !== undefined && delta > 0 && moodOf(value, t) === 'grumpy') {
+    effective = delta / 2;
+  }
+  return clamp(value + effective);
 };
 
 /**
@@ -168,6 +219,21 @@ export const moodAnims = (mood: MoodKey, cfg: MoodConfig): string[] => {
 };
 
 /**
+ * 按心情取某个池的替代候选（idle / clicks）。
+ *
+ * 返回**空数组**表示"该档没配、用原池"——调用方据此判断要不要替换：
+ *   `const alt = moodPool(key, 'idle', cfg); const pool = alt.length ? alt : anims.idle;`
+ *
+ * 为什么要这个：分类权重倍率是**概率性**变化（玩耍 20%→32%），用户不一定察觉得到。
+ * 直接替换 idle / clicks 这类**高频**池，心情的影响才会被明显感知（P1-1 / P1-2）。
+ */
+export const moodPool = (mood: MoodKey, which: 'idle' | 'clicks', cfg: MoodConfig): string[] => {
+  const spec = cfg.specs?.[mood];
+  if (!spec || mood === 'normal') return [];
+  return spec[which] ?? [];
+};
+
+/**
  * 一只宠物的心情运行时（两端共用的薄状态机）。
  *
  * 用法（浏览器 PetCard / 桌面 sprite 各持一个实例）：
@@ -213,6 +279,13 @@ export class MoodState {
     return applyMoodFactors(categories, this.key, this.cfg);
   }
 
+  /** 按当前心情取 idle / clicks 的**替代池**；空数组 = 该档没配、调用方用原池。
+   *  关闭时恒为空数组（= 永不替换，等价原行为）。 */
+  pool(which: 'idle' | 'clicks'): string[] {
+    if (!this.enabled) return [];
+    return moodPool(this.key, which, this.cfg);
+  }
+
   /** 切换时该播的引导动画名（无切换 / 无配置 / 关闭 → null） */
   cue(): string | null {
     if (!this.enabled) return null;
@@ -221,18 +294,43 @@ export class MoodState {
     return anims[Math.floor(Math.random() * anims.length)];
   }
 
-  /** 写入一个事件；档位发生变化时返回新档位（否则 null） */
+  /** 写入一个事件；档位发生变化时返回新档位（否则 null）。
+   *  传了 thresholds 就启用「烦躁时正收益减半」（见 applyEvent 注释）。 */
   event(name: string): MoodKey | null {
     if (!this.enabled) return null;
-    this.value = applyEvent(this.value, name);
+    this.value = applyEvent(this.value, name, this.cfg.thresholds);
     return this.sync();
   }
 
-  /** 一次时间推进（dt 秒，hour = 当前小时，决定回归目标）；档位变化时返回新档位 */
-  tick(dt: number, hour: number): MoodKey | null {
+  /** 一次时间推进（dt 秒，hour = 当前小时，决定回归目标）；档位变化时返回新档位。
+   *
+   *  `idleMs` 可选：距离上次用户交互过了多久（毫秒）。传入且超过 NEGLECT_AFTER_MS 时，
+   *  在回归之外**额外**扣一点心情（NEGLECT_RATE_PER_MIN/分钟）——这是"被忽视"惩罚。
+   *  为什么要它：原来心情只有事件驱动，用户不理它时心情恒定不变，
+   *  桌宠不会因为被冷落而低落，缺少"需要陪伴"的驱动力。
+   *  不传 idleMs = 不做惩罚（老调用方行为不变）。 */
+  tick(dt: number, hour: number, idleMs?: number): MoodKey | null {
     if (!this.enabled) return null;
     this.value = decayValue(this.value, this.cfg.decayPerSec, dt, restValue(hour));
+    if (idleMs !== undefined && idleMs > NEGLECT_AFTER_MS && dt > 0) {
+      // 只在超过阈值**之后**的那段时间扣，不追溯之前的空闲
+      const penalty = NEGLECT_RATE_PER_MIN * (dt / 60);
+      this.value = Math.max(0, this.value - penalty);
+    }
     return this.sync();
+  }
+
+  /** 恢复一个存档值（启动时用）。非法值静默忽略，保持基准值。 */
+  restore(value: unknown): void {
+    if (!this.enabled) return;
+    if (typeof value !== 'number' || !Number.isFinite(value)) return;
+    this.value = Math.max(0, Math.min(100, value));
+    this.key = moodOf(this.value, this.cfg.thresholds);
+  }
+
+  /** 导出当前值（持久化用）。关闭时返回 null（不写盘）。 */
+  snapshot(): number | null {
+    return this.enabled ? this.value : null;
   }
 
   /** 重算档位；与上一次不同则记录并返回它（= 切换信号） */

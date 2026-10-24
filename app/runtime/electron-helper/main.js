@@ -48,7 +48,7 @@ try {
 const { app, BrowserWindow, ipcMain, screen, shell, protocol } = electronApi;
 const path = require('node:path');
 const { execFileSync, spawn, spawnSync } = require('node:child_process');
-const { readFileSync, writeFileSync, existsSync } = require('node:fs');
+const { readFileSync, writeFileSync, existsSync, mkdirSync } = require('node:fs');
 const fsPromises = require('node:fs/promises');
 // 点击穿透兜底通道的纯判定（不依赖 Electron 的 forward 鼠标钩子；见文件头注释）
 const { decideWindowIgnore } = require('./pointer-target.js');
@@ -858,6 +858,50 @@ app.whenReady().then(() => {
       }
       const now = readAutoStart();
       return { ok: now === !!enabled, enabled: now };
+    } catch (e) {
+      return { ok: false, error: String(e && e.message ? e.message : e) };
+    }
+  });
+
+  // ---- 心情持久化（P1-4）----------------------------------------------------
+  // 渲染进程没有 fs 权限（contextIsolation），由主进程读写包内 data/memory.json。
+  // 只存/取 mood 键，其余字段（宿主的对话记忆）原样保留 —— 读-改-写，
+  // 不能直接覆盖整个文件，否则会抹掉对话记忆。
+  // 与宿主同一个文件：宿主 standalone.js 里 userRoot = join(dshHome, 'dsh-pet')，
+
+  // 所以对话记忆在 data/dsh-pet/memory.json。心情也写这里（只加 mood 键，
+
+  // 读-改-写，绝不动 messages），两边共用一份存档。
+  const moodMemoryPath = path.join(petPackageRoot, 'data', 'dsh-pet', 'memory.json');
+  ipcMain.handle('pet:load-mood', () => {
+    try {
+      if (!existsSync(moodMemoryPath)) return { ok: true, mood: null };
+      const raw = readFileSync(moodMemoryPath, 'utf8');
+      const obj = JSON.parse(raw);
+      return {
+        ok: true,
+        mood: typeof obj.mood === 'number' ? obj.mood : null,
+        updatedAt: obj.moodUpdatedAt || null,
+      };
+    } catch (e) {
+      // 文件损坏/不存在都不该阻止桌宠启动，当作"没有存档"
+      return { ok: false, mood: null, error: String(e && e.message ? e.message : e) };
+    }
+  });
+  ipcMain.handle('pet:save-mood', (event, payload) => {
+    try {
+      const v = payload && payload.mood;
+      if (typeof v !== 'number' || !Number.isFinite(v)) return { ok: false, error: 'mood 必须是数字' };
+      // 读-改-写：保留宿主的其它字段
+      let obj = {};
+      if (existsSync(moodMemoryPath)) {
+        try { obj = JSON.parse(readFileSync(moodMemoryPath, 'utf8')) || {}; } catch { obj = {}; }
+      }
+      obj.mood = Math.max(0, Math.min(100, v));
+      obj.moodUpdatedAt = Date.now();
+      mkdirSync(path.dirname(moodMemoryPath), { recursive: true });
+      writeFileSync(moodMemoryPath, JSON.stringify(obj, null, 2), 'utf8');
+      return { ok: true };
     } catch (e) {
       return { ok: false, error: String(e && e.message ? e.message : e) };
     }
