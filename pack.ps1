@@ -72,7 +72,12 @@ $excludeFilePatterns = @(
   'mood-tune.ps1',     # 我的调参辅助脚本（非产品功能）
   'pack.ps1',          # 打包脚本本身（构建工具，不进包）
   'make-preview-gifs.ps1', # 预览 GIF 生成脚本（构建工具，不进包）
+  'make-preview-gifs.py',
+  'read_docx.py',
+  '__pycache__',
   'release-list.txt',  # 打包校验用的临时清单
+  'sea-prep.blob',     # SEA 打包中间产物
+  '*.exe.old',
   'dbg-*',             # 调试残留
   '*.tmp'
 )
