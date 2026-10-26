@@ -30,7 +30,7 @@ git 只存"能体现改动"的部分。**要让用户下载即用，必须打一
 
 `pack.ps1` 会自动：
 - 纳入全部 578 个文件（含 electron/、runtime/、素材、exe）
-- 排除：`.git/`、`node_modules/`、`_还原点/`、`_exe/`、日志、配置备份、`*.pristine`、`.tools/`（ffmpeg）
+- 排除：`.git/`、`node_modules/`、`electron/resources/app/`、日志、配置备份、`*.pristine`、`.tools/`（ffmpeg）
 - 预检 20 个必需文件，缺一个就中止
 
 ## 传到 Release

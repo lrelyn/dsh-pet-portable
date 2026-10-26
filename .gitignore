@@ -30,8 +30,6 @@
 /app/assets/memes/
 
 # ---------- 备份 / 归档 ----------
-/_还原点/
-/_exe/
 *.pristine
 *.pre-nobalance
 *.bak

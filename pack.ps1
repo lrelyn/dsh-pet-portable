@@ -8,7 +8,7 @@
 #   · 整目录打包（便携版的全部价值在"整个文件夹拷贝即用"）
 #   · 排除：日志、调试残留、备份配置、node_modules（构建依赖，运行不需要）、
 #     参考快照（*.pristine / *.pre-nobalance）、我的调参脚本
-#   · _还原点/_exe 是作者留的原始副本，**排除**（打包给用户用不到，还占几百 MB）
+#   · electron/resources/app 是**陷阱目录**，必须排除（详见下方 $excludePathPatterns 注释）
 
 param(
   [string]$Version = '',
@@ -49,8 +49,6 @@ Write-Host ""
 # --- 排除规则（相对于 $root 的路径片段）---
 $excludeDirs = @(
   'node_modules',      # 构建依赖，运行不需要
-  '_还原点',            # 作者留的原始副本
-  '_exe',               # 同上
   '.git',
   '.tools'             # ffmpeg（109 MB zip + 300 MB 解压），只在生成预览 GIF 时用
 )
