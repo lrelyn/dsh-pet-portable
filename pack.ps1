@@ -54,10 +54,18 @@ $excludeDirs = @(
   '.git',
   '.tools'             # ffmpeg（109 MB zip + 300 MB 解压），只在生成预览 GIF 时用
 )
-# 特殊排除：electron/resources/app 是 Electron 的"默认应用"目录，我们显式传
-# `electron.exe <app/runtime/electron-helper/main.js>` 启动（renderer 进程的
-# --app-path 可证），从来不用它。里面躺着一套**陈旧的历史副本**（sprite.js 等），
-# 打进去只会让包变大、并让人误以为改那里有效——排除。
+# 特殊排除：electron/resources/app 是**危险目录**，必须排除。
+#
+# 曾经这里写着"我们显式传 `electron.exe <main.js>`，从来不用它"——那句话是**错的**。
+# Electron 的加载优先级是：只要 `electron.exe` 同级的 `resources\app\` 目录存在，
+# 就**忽略命令行传入的脚本路径**，强制把它当作 app 目录。于是：
+#   - 维护代码在 app/runtime/electron-helper（改了没反应）
+#   - 实际运行 electron/resources/app 里的陈旧副本（菜单还是旧版）
+# renderer 进程的 `--app-path=` 参数就是证据。删除该目录后，`--app-path` 才正确
+# 指向 app/runtime/electron-helper。
+#
+# 结论：这个目录只能删，不能留——留着就必然走偏。打包时也排除，防止发布版
+# 再次出现"代码改了但界面没变"。
 # 注意 default_app.asar 要保留（Electron 自身需要）。
 $excludePathPatterns = @(
   'electron/resources/app'

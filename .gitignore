@@ -81,3 +81,6 @@ __pycache__/
 sea-prep.blob
 *.exe.old
 /node_modules/
+
+# 独立模式兜底下载的 Electron（launcher 用包内 electron，这份不该留）
+/data/electron/
