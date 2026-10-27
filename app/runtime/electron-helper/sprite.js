@@ -2783,7 +2783,19 @@ class PetSprite {
       // 碎碎念、对话、回到初始位置留在顶层——它们是对宠物的互动动作，不是设置。
       // 顶层不再重复列出「重载配置」，避免同一个功能在菜单里出现两次。
       // 固定入口，handler 内部仍会自行校验，所以关着余额也不会出错。
-      { label: '投喂', action: 'feed' },
+      // 投喂子菜单（P0）：PET_FEED(foodId) 早支持 7 种食物，但菜单只传无参的 'feed'，
+      // 导致 6 种食物用户点不到。这里遍历当前生效的食物表，每项 action 带 foodId。
+      // 食物表来源：vitals.cfg.foods（用户覆盖）→ sanitizeFoods 兜底（内置 7 种）。
+      {
+        label: '投喂',
+        children: (() => {
+          const F = (typeof window !== 'undefined' && window.PET_FOODS) ? window.PET_FOODS : null;
+          if (!F) return [{ label: '小鱼干', action: 'feed:fish' }];
+          const list = F.sanitizeFoods(
+            (this.vitals && this.vitals.cfg && this.vitals.cfg.foods) || undefined);
+          return list.map((f) => ({ label: f.name, action: 'feed:' + f.id }));
+        })(),
+      },
       // 状态面板（第四批）：图形化展示四维状态 + 好感度等级
       { label: '她的状态', action: 'status-panel' },
       {
@@ -2993,8 +3005,10 @@ class PetSprite {
       return;
     }
     // 投喂: 播吃小鱼干, 随后冒一句台词（走 host, 气泡槽与碎碎念共用）
-    if (leaf.action === 'feed') {
-      this.PET_FEED();
+    // 投喂：'feed'（旧菜单/无参数）与 'feed:<foodId>'（子菜单）都命中
+    if (leaf.action === 'feed' || leaf.action.startsWith('feed:')) {
+      const foodId = leaf.action === 'feed' ? undefined : leaf.action.slice(5);
+      this.PET_FEED(foodId);
       this._feedCount = (this._feedCount || 0) + 1;
       return;
     }
