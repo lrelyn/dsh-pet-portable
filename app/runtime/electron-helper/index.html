@@ -62,9 +62,13 @@
       .pet-hit.dragging {
         cursor: grabbing;
       }
-      /* 心情徽标（moods.enabled=true 才出现）：宠物右上角的小药丸 —— emoji + 档位 + 数值。
-         pointer-events:none 绝不抢命中区（宠物照常能点/拖）；尺寸随 --pet-size 等比缩放。
-         四档配色与气泡同源（白底圆角 + 轻投影），切档时 opacity 过渡，不抢动画注意力。 */
+      /* 心情徽标：宠物右上角的小药丸 —— emoji + 数值。
+         2026-10-27 改版：原来「头顶一条状态栏（饿/困小药丸）」+「右上心情 emoji」+「右上心情药丸」
+         三处并存，用户反馈太乱。现在只剩这一处徽标，让它自己承担"她现在的状态"：
+           · emoji 不再固定为心情 emoji，而是由 status-icons.js 的优先级决定（饿/困/睡/无聊/好感 > 心情）
+           · 数值跟着 emoji 走（饿了显示饱食度、累了显示精力，没有数值的状态就不显示数字）
+           · 点击徽标 → 打开「她的状态」面板，再点一次关闭（.is-on 时才 pointer-events:auto）
+         默认 pointer-events:none 绝不抢命中区（宠物照常能点/拖）；尺寸随 --pet-size 等比缩放。 */
       .pet-mood {
         position: absolute;
         right: calc(var(--pet-size, 462px) * -0.02);
@@ -92,46 +96,36 @@
       }
       .pet-mood.is-on {
         opacity: 1;
+        pointer-events: auto;
+        cursor: pointer;
+      }
+      /* 按下时轻微缩一下，明确「这是个能点的东西」 */
+      .pet-mood.is-on:active {
+        transform: scale(0.94);
       }
       .pet-mood-emoji {
         font-size: calc(var(--pet-size, 462px) * 0.042);
+      }
+      /* 状态说明文字（"有点饿" / "睡着了" / "开心"）。
+         默认隐藏：实测把「精疲力竭」「饿坏了，快喂我」写进药丸会把它撑成一条横幅，
+         与「太乱」的诉求相反。完整说明仍在 title 里（悬浮可见），
+         需要时给 .pet-mood 加 .show-text 就能显示（见 sprite.js 的 renderMood 注释）。 */
+      .pet-mood-text {
+        display: none;
+        font-size: calc(var(--pet-size, 462px) * 0.026);
+        opacity: 0.7;
+      }
+      .pet-mood.show-text .pet-mood-text {
+        display: inline;
       }
       .pet-mood-val {
         font-variant-numeric: tabular-nums;
         opacity: 0.65;
       }
-      /* 四档着色：只染 emoji，文字保持深灰（避免整块彩字在浅色桌面上发飘） */
-      /* 头顶状态图标（P2 §5.1）：纯 emoji，悬浮在宠物正上方。
-         与心情徽标（右上角）错开位置，避免互相遮挡。
-         pointer-events:none 绝不抢命中区；状态消失时 opacity 过渡淡出。 */
-      .pet-status-icon {
-        position: absolute;
-        left: 50%;
-        top: calc(var(--pet-size, 462px) * -0.14);
-        transform: translateX(-50%);
-        font-size: calc(var(--pet-size, 462px) * 0.075);
-        line-height: 1;
-        z-index: 5;
-        pointer-events: none;
-        opacity: 0;
-        transition: opacity 0.35s ease, transform 0.35s ease;
-        filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.22));
-        user-select: none;
-      }
-      .pet-status-icon.is-on {
-        opacity: 1;
-      }
-      /* 轻微上下浮动，让图标"活"一点，但不抢主动画注意力 */
-      @keyframes petStatusFloat {
-        0%, 100% { transform: translateX(-50%) translateY(0); }
-        50% { transform: translateX(-50%) translateY(calc(var(--pet-size, 462px) * -0.016)); }
-      }
-      .pet-status-icon.is-on {
-        animation: petStatusFloat 2.4s ease-in-out infinite;
-      }
-      @media (prefers-reduced-motion: reduce) {
-        .pet-status-icon.is-on { animation: none; }
-      }
+      /* 着色：只染 emoji，文字保持深灰（避免整块彩字在浅色桌面上发飘）。
+         两套来源：`pet-mood-*` 是心情档位（happy/tired/grumpy），`is-*` 是需求族
+         （hunger/energy/sleep/social，来自 status-icons.js 的 FAMILY）。同时存在时后者写在后面 → 优先，
+         因为「她饿了」比「她心情还行」更值得一眼看出来。 */
       .pet-mood-happy .pet-mood-emoji {
         filter: drop-shadow(0 0 calc(var(--pet-size, 462px) * 0.008) rgba(255, 176, 32, 0.85));
       }
@@ -140,6 +134,18 @@
       }
       .pet-mood-grumpy .pet-mood-emoji {
         filter: drop-shadow(0 0 calc(var(--pet-size, 462px) * 0.008) rgba(235, 87, 87, 0.85));
+      }
+      .pet-mood.is-hunger .pet-mood-emoji {
+        filter: drop-shadow(0 0 calc(var(--pet-size, 462px) * 0.008) rgba(240, 160, 60, 0.85));
+      }
+      .pet-mood.is-energy .pet-mood-emoji {
+        filter: drop-shadow(0 0 calc(var(--pet-size, 462px) * 0.008) rgba(120, 150, 220, 0.85));
+      }
+      .pet-mood.is-sleep .pet-mood-emoji {
+        filter: drop-shadow(0 0 calc(var(--pet-size, 462px) * 0.008) rgba(140, 130, 200, 0.85));
+      }
+      .pet-mood.is-social .pet-mood-emoji {
+        filter: drop-shadow(0 0 calc(var(--pet-size, 462px) * 0.008) rgba(235, 120, 160, 0.85));
       }
       /* 余额气泡：与浏览器 overlay 同一套视觉（白色圆润泡 + 峰/谷/错误着色），
          尺寸随宠物宽度 var(--pet-size) 等比缩放；字体经 renderer 注入上首软糖体 @font-face */

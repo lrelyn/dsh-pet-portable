@@ -80,6 +80,16 @@ const PET_WORK_RECHARGE_MS = 10 * 60 * 1000;
 const PET_WORK_CLIP_MS = 10500;
 
 /**
+ * 心情徽标上的「一次性状态」存活时长。
+ * 好感度升级的 💗 只是提醒，一直挂着反而变成噪音；到点自动落回心情 emoji。
+ * 用时间戳而不是 setTimeout：徽标刷新本身就是高频事件，比额外挂一个定时器省心，
+ * 也不会在 dispose 后遗留回调。
+ */
+const PET_BADGE_TRANSIENT_MS = 8 * 1000;
+/** 多久没人理她算「无聊」（🎈）。20 分钟：短了会一直显示，长了永远看不到。 */
+const PET_BORED_AFTER_MS = 20 * 60 * 1000;
+
+/**
  * 动作之间的播放间隔（可在「设置」里改，存在 localStorage）。
  *
  * 一个动作演完后，先循环播「待机呼吸休闲」等这么久，再换下一个动作。
@@ -504,8 +514,17 @@ class PetSprite {
     this.hit.style.height = ((S.HIT_BOX.y1 - S.HIT_BOX.y0) / 360) * 100 + '%';
     this.hit.title = this.pet.name;
     // 心情徽标（moods.enabled=false 时永远 is-on 都不加，完全不出现——零视觉影响）
+    //
+    // 2026-10-27 收敛：原来这里还有一处「头顶状态栏」(.pet-status-bar)，与徽标并存
+    // 被用户反馈「太乱」。现在只留这一处徽标：emoji 由 status-icons.js 的优先级决定
+    // （饿/困/睡/好感/无聊 优先于心情档），数值跟着 emoji 走，点一下开「她的状态」面板。
+    //
+    // 药丸里只有 emoji + 数值：说明文字（"精疲力竭" / "饿坏了，快喂我"）曾经也写进来，
+    // 实测会把药丸撑成一条横幅——与"别乱"的诉求相反。文字仍写进 moodText（供面板/调试读取）
+    // 和 title（悬浮可见），但 CSS 默认不显示它。
     this.moodEl = document.createElement('div');
     this.moodEl.className = 'pet-mood';
+    this.moodEl.title = '点击查看她的状态';
     this.moodEmoji = document.createElement('span');
     this.moodEmoji.className = 'pet-mood-emoji';
     this.moodText = document.createElement('span');
@@ -515,14 +534,8 @@ class PetSprite {
     this.moodEl.appendChild(this.moodEmoji);
     this.moodEl.appendChild(this.moodText);
     this.moodEl.appendChild(this.moodVal);
-    // 头顶状态图标（P2 §5.1）：纯 emoji，无素材成本。
-    // 与心情徽标错开位置（徽标在右上、图标在正上方），避免互相遮挡。
-    this.statusIconEl = document.createElement('div');
-    this.statusIconEl.className = 'pet-status-icon';
-    this.statusIconEl.title = '';
-    this._statusIconSig = '';
-    this._affectionJustUp = false;   // 好感度刚升级（一次性标记）
-    this._boredFlag = false;         // 长时间没玩（一次性标记）
+    this._moodSig = '';
+    this._affectionJustUpAt = 0;     // 好感度刚升级的时间戳（0 = 没有这个提醒）
     this.bubble = document.createElement('div');
     this.bubble.className = 'pet-bubble';
 
@@ -531,7 +544,6 @@ class PetSprite {
     stage.appendChild(this.hit);
     this.el.appendChild(this.bubble);
     this.el.appendChild(this.moodEl);
-    this.el.appendChild(this.statusIconEl);
     this.el.appendChild(stage);
     rootEl.appendChild(this.el);
     this.position();
@@ -547,6 +559,14 @@ class PetSprite {
     window.addEventListener('pointerup', (e) => this.onPointerUp(e), { signal: ac.signal });
     window.addEventListener('pointercancel', (e) => this.onPointerUp(e), { signal: ac.signal });
     this.hit.addEventListener('lostpointercapture', (e) => this.onPointerUp(e), { signal: ac.signal });
+    // 心情徽标点击 → 开关「她的状态」面板（2026-10-27 用户要求：点图标显示、再点关闭）。
+    // 徽标在窗口余量区（hitRect 之外），能收到点击的前提是 onMouseMove 把该矩形也算作可交互，
+    // 否则窗口整窗穿透，事件根本进不来（见 onMouseMove 里的 badgeRect 判定）。
+    this.moodEl.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.PANEL_Toggle();
+    }, { signal: ac.signal });
     // 点击穿透：窗口默认整窗穿透（main 设 setIgnoreMouseEvents(true, {forward:true})），
     // 光标进/出身体命中区时翻转可交互；穿透期间 mousemove 由 main 转发进来（forward:true），
     // mouseleave 保证光标离开窗口立即恢复穿透（透明像素不挡下层应用，与浏览器一致）。
@@ -555,9 +575,10 @@ class PetSprite {
       'mouseleave',
       () => {
         // 光标离开窗口：菜单若开着立刻收起（菜单是窗口内 DOM，离开即不可达），再恢复穿透；
-        // 对话弹窗开着则不恢复——弹窗是窗口内 DOM，鼠标还要回来点输入框（与 menuOpen 同守卫）
+        // 对话弹窗开着则不恢复——弹窗是窗口内 DOM，鼠标还要回来点输入框（与 menuOpen 同守卫）。
+        // 状态面板同理：它画在 body 上、可能伸到窗口边缘，离开窗口就翻回穿透会让它点不动。
         this.closeMenu();
-        if (!this.chatOpen) this.setInteractive(false);
+        if (!this.chatOpen && this._panelOpen !== true) this.setInteractive(false);
       },
       { signal: ac.signal },
     );
@@ -615,7 +636,7 @@ class PetSprite {
     // 否则最后一次状态变化会丢，离线演化算出来的是旧值。
     try { this.VITALS_Save(); } catch { /* 销毁阶段不抛 */ }
     try { this.PANEL_Close(); } catch { /* 销毁阶段不抛 */ }
-    this.statusIconEl = null;   // 断开 DOM 引用
+    this.moodEl = null;        // 断开 DOM 引用
     // 睡眠兜底定时器同理（8s 接力的那个）
     if (this.PET_SLEEP_Timer) {
       clearTimeout(this.PET_SLEEP_Timer);
@@ -1315,13 +1336,13 @@ class PetSprite {
       // 升级反馈：气泡 + 心情小奖励
       const lv = this.affinity.level;
       this.showMenuNotice('好感度提升 → Lv.' + lv.lv + '「' + lv.name + '」');
+      // 顺序有讲究：先置标记再 renderMood，否则徽标画的是旧状态（💗 要等下次 tick 才出现）。
+      this._affectionJustUpAt = Date.now();
       if (this.mood && this.mood.enabled) {
         this.mood.event('workSlack');   // 用已有的正向小事件（不新增事件名）
-        this.renderMood();
       }
+      this.renderMood();
       console.info('[dsh-pet] 好感度升级 Lv.' + lv.lv + ' ' + lv.name);
-      this._affectionJustUp = true;   // 头顶显示 💗，下次 tick 后清掉
-      this.renderStatusIcon();
     }
     if (r.applied !== 0) this.VITALS_SaveThrottled();
     return r;
@@ -1475,6 +1496,15 @@ class PetSprite {
     this.syncInputBusy && this.syncInputBusy();
   }
 
+  /**
+   * 开关状态面板（2026-10-27：点心情徽标走这里，再点一次关闭）。
+   * 「她的状态」右键菜单项仍直接调 PANEL_Open（幂等），两者不冲突。
+   */
+  PANEL_Toggle() {
+    if (this._panelOpen && this._panelEl) this.PANEL_Close();
+    else this.PANEL_Open();
+  }
+
   /** 好感度加成的正收益系数（1.0~1.5），供 mood 事件放大用 */
   AFFINITY_Bonus() {
     if (!this.affinity || !this.affinity.enabled) return 1;
@@ -1561,7 +1591,9 @@ class PetSprite {
       }
     } catch { /* 广播失败不影响主体 */ }
 
-    this.renderStatusIcon();   // 头顶状态图标（饿/困/睡），随 vitals 变化
+    // 徽标（饿/困/睡 + 心情）随 vitals 变化 —— 原来这里刷的是头顶状态栏，
+    // 2026-10-27 两处合一后统一走 renderMood（内部有签名短路，不会每拍重建 DOM）。
+    this.renderMood();
     this.VITALS_SaveThrottled();
   }
 
@@ -1681,40 +1713,62 @@ class PetSprite {
   };
 
   /**
-   * 刷新头顶状态图标（P2 §5.1）。
+   * 刷新心情徽标：**只此一处**常驻状态显示（2026-10-27 收敛，原头顶状态栏已删除）。
    *
-   * 只在**状态键变化**时动 DOM（签名短路），避免每 5 秒 tick 都重设样式。
-   * 多个状态同时存在时只显示最紧急的一个（见 status-icons.js 的优先级表）——
-   * 同时显示多个会变成噪音，反而失去"抬眼就能看懂"的价值。
+   * emoji 的两级优先：
+   *   1. 需求型（status-icons.js 的 pickIcons）：饿 / 困 / 睡着 / 好感升级 / 无聊
+   *      —— 这些是「当下有事」，最该被看见，带自己的数值（睡着不带数值，回落到心情值）
+   *   2. 心情档（MOOD_LABEL）：开心 / 平静 / 疲倦 / 烦躁 —— 这是「底色」
+   * 数值永远只显示一个：有需求时显示需求数值，否则显示心情值。
+   *
+   * 只在签名变化时动 DOM（签名含档位、心情值、emoji、显示值、文字），
+   * 关闭态不加 is-on（徽标不可见，零视觉影响）。
    */
-  renderStatusIcon() {
-    if (!this.statusIconEl) return;
+  renderMood() {
+    if (!this.moodEl) return;   // dispose 后不再碰 DOM
+    const enabled = this.mood.enabled;
+    const key = enabled ? this.mood.current : 'normal';
+    const val = this.mood.value0.toFixed(0);
+
+    // 需求型状态（只在心情系统打开时参与——关掉心情就该彻底安静）
     const I = (typeof window !== 'undefined' && window.PET_STATUS_ICONS) ? window.PET_STATUS_ICONS : null;
-    if (!I) return;
-
-    const energy = (this.vitals && this.vitals.enabled) ? this.vitals.energy : 100;
-    const hunger = (this.vitals && this.vitals.enabled) ? this.vitals.hunger : 100;
-    const icon = I.pickIcon({
-      energy,
-      hunger,
-      sleeping: this.PET_SLEEP_On === true,
-      affectionJustUp: this._affectionJustUp === true,
-      bored: this._boredFlag === true,
-    });
-
-    const sig = I.iconSignature(icon);
-    if (sig === this._statusIconSig) return;   // 没变就短路
-    this._statusIconSig = sig;
-
-    if (!icon) {
-      this.statusIconEl.className = 'pet-status-icon';
-      this.statusIconEl.textContent = '';
-      this.statusIconEl.title = '';
-      return;
+    let need = null;
+    if (enabled && I && typeof I.pickIcons === 'function') {
+      const energy = (this.vitals && this.vitals.enabled) ? this.vitals.energy : 100;
+      const hunger = (this.vitals && this.vitals.enabled) ? this.vitals.hunger : 100;
+      const nowMs = Date.now();
+      // 一次性标记在这里按时间衰减（不是等谁调用 clearTransientIconFlags，
+      // 那个方法历史上从没有调用方，标记会永远挂着）。
+      const affectionUp = this._affectionJustUpAt > 0 && nowMs - this._affectionJustUpAt < PET_BADGE_TRANSIENT_MS;
+      const bored = this.lastInteractionAt > 0 && nowMs - this.lastInteractionAt > PET_BORED_AFTER_MS;
+      const picks = I.pickIcons({
+        energy,
+        hunger,
+        sleeping: this.PET_SLEEP_On === true,
+        affectionJustUp: affectionUp,
+        bored,
+      }, 1);
+      if (picks.length) need = picks[0];
     }
-    this.statusIconEl.className = 'pet-status-icon is-on';
-    this.statusIconEl.textContent = icon.emoji;
-    this.statusIconEl.title = icon.text;
+
+    const label = PetSprite.MOOD_LABEL[key] || PetSprite.MOOD_LABEL.normal;
+    const emoji = need ? need.emoji : label.emoji;
+    const text = need ? need.text : label.text;
+    const shownVal = (need && need.value !== null && need.value !== undefined) ? String(need.value) : val;
+    const fam = need ? (((I && I.FAMILY) && I.FAMILY[need.key]) || need.key) : '';
+
+    const sig = (enabled ? '1' : '0') + '|' + key + '|' + val + '|' + emoji + '|' + shownVal + '|' + text;
+    if (this._moodSig === sig) return;
+    this._moodSig = sig;
+
+    this.moodEmoji.textContent = emoji;
+    this.moodText.textContent = text;
+    this.moodVal.textContent = shownVal;
+    this.moodEl.className =
+      'pet-mood' + (enabled ? ' is-on pet-mood-' + key + (fam ? ' is-' + fam : '') : '');
+    this.moodEl.title = enabled
+      ? (text ? text + ' · ' : '') + '心情 ' + val + ' · 点击查看她的状态'
+      : '点击查看她的状态';
   }
 
   /**
@@ -1735,31 +1789,16 @@ class PetSprite {
   }
 
   /**
-   * 清掉一次性状态标记（好感度升级、无聊）。
+   * 清掉一次性状态标记（好感度升级）。
    * 这些是"事件型"而非"持续型"，显示一段时间后应消失。
+   * 平时由 renderMood 按时间戳自动过期，这个方法留给「立刻收掉」的场合。
    */
   clearTransientIconFlags() {
-    this._affectionJustUp = false;
-    this._boredFlag = false;
+    if (!this._affectionJustUpAt) return;
+    this._affectionJustUpAt = 0;
+    this.renderMood();
   }
 
-  /**
-   * 刷新心情徽标：emoji + 档位 + 数值。
-   * 只在签名变化时动 DOM（避免每次 tick 都重设），关闭态不加 is-on（徽标不可见）。
-   */
-  renderMood() {
-    const enabled = this.mood.enabled;
-    const key = enabled ? this.mood.current : 'normal';
-    const val = this.mood.value0.toFixed(0);
-    const sig = (enabled ? '1' : '0') + '|' + key + '|' + val;
-    if (this._moodSig === sig) return;
-    this._moodSig = sig;
-    const label = PetSprite.MOOD_LABEL[key] || PetSprite.MOOD_LABEL.normal;
-    this.moodEmoji.textContent = label.emoji;
-    this.moodText.textContent = label.text;
-    this.moodVal.textContent = val;
-    this.moodEl.className = 'pet-mood' + (enabled ? ' is-on pet-mood-' + key : '');
-  }
   handleEnded() { // __feedLockV2
     // 心情时钟：以"动画播完"为天然节拍（不另起定时器）。dt 取真实经过时间，
     // hour 决定回归目标——夜里越待越困，白天自然回暖（与浏览器 pet.ts 同一语义）。
@@ -2678,7 +2717,11 @@ class PetSprite {
    * 位移分不清"拖拽跟手"和"漫游/抛掷"）。所以由渲染端上报，主进程的兜底通道据此闭嘴。
    */
   inputBusy() {
-    return this.dragState.active || this.menuOpen || this.chatOpen;
+    // _panelOpen 必须算进去：面板有可能在「右键菜单已收起」之后仍然开着
+    // （点徽标开面板 → 光标离开窗口 → closeMenu 把 menuOpen 置回 false），
+    // 这时若 busy 为 false，主进程兜底轮询会按「光标不在身体命中区」把窗口翻回穿透，
+    // 结果就是面板还挂在屏幕上却点不动（含它自己的关闭按钮）。
+    return this.dragState.active || this.menuOpen || this.chatOpen || this._panelOpen === true;
   }
 
   /**
@@ -2702,14 +2745,37 @@ class PetSprite {
     if (window.petBridge) window.petBridge.setInteractive(next);
   }
 
+  /**
+   * 光标是否落在心情徽标上（徽标在窗口余量区，hitRect 之外，必须单独判）。
+   *
+   * 为什么需要这一步：窗口默认整窗穿透，可交互区由这里翻转——只判身体命中区的话，
+   * 徽标上的点击根本进不来（用户反馈「点图标没反应」就是这条）。徽标不可见时
+   * 一律返回 false，避免在透明区域抢下层应用的点击。
+   *
+   * wx/wy 是窗口内 CSS 坐标，与 getBoundingClientRect 同一坐标系，可直接比较。
+   */
+  moodBadgeHit(wx, wy) {
+    if (!this.moodEl) return false;
+    // 关闭心情时徽标不显示（无 is-on），就不该扩大热区
+    if (!(this.mood && this.mood.enabled)) return false;
+    if (typeof this.moodEl.getBoundingClientRect !== 'function') return false;
+    const b = this.moodEl.getBoundingClientRect();
+    if (!b || !(b.width > 0) || !(b.height > 0)) return false;
+    // 留 2px 容差：徽标很小，边缘精确判定会显得「点不中」
+    const pad = 2;
+    return wx >= b.left - pad && wx <= b.right + pad && wy >= b.top - pad && wy <= b.bottom + pad;
+  }
+
   onMouseMove(e) {
     // 拖拽中窗口逐帧跟随光标、指针相对窗口坐标会有帧级抖动——强制保持可交互，绝不翻转（翻转会断拖拽）
     if (this.dragState.active) {
       this.setInteractive(true);
       return;
     }
-    // 右键菜单/对话弹窗开启：整窗保持可交互（悬停菜单项/点输入框都不触发穿透翻转）；关闭后恢复命中区判定
-    if (this.menuOpen || this.chatOpen) {
+    // 右键菜单/对话弹窗/状态面板开启：整窗保持可交互（悬停菜单项/点输入框/点面板都不触发穿透翻转）；
+    // 关闭后恢复命中区判定。面板尤其重要：它画在 document.body 上，位置既不在 hitRect
+    // 也不在徽标矩形里，只判那两个矩形会让光标一移进面板就翻回穿透 → 面板点不动。
+    if (this.menuOpen || this.chatOpen || this._panelOpen === true) {
       this.setInteractive(true);
       return;
     }
@@ -2721,7 +2787,9 @@ class PetSprite {
     const wy = Number.isFinite(e.clientY) ? e.clientY : toLocal(e.screenY) - (this.pos.y + VIEW.y - this.margin.t);
     const px = wx - this.margin.l;
     const py = wy - this.margin.t;
-    this.setInteractive(px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h);
+    this.setInteractive(
+      (px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h) || this.moodBadgeHit(wx, wy),
+    );
   }
 
   // e = 原生 MouseEvent（分部位触摸要用它的 clientY 算命中区内的纵向比例）。

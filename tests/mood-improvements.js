@@ -4,8 +4,9 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 // shared-core.js 是 UMD 包装：`var PetShared = (function(exports){...})({})`
 // 它不改 module.exports，而是把对象赋给全局 PetShared。所以在 vm 里跑一遍再取。
+const ROOT = process.argv[2] || path.join(__dirname, '..');
 const src = fs.readFileSync(
-  path.join(__dirname, 'app', 'runtime', 'electron-helper', 'shared-core.js'), 'utf8');
+  path.join(ROOT, 'app', 'runtime', 'electron-helper', 'shared-core.js'), 'utf8');
 const sandbox = { window: {}, console };
 vm.createContext(sandbox);
 vm.runInContext(src, sandbox);
