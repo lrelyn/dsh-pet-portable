@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { createReadStream, existsSync, fstatSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, fstatSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, normalize, resolve, sep } from "node:path";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
@@ -3398,6 +3398,59 @@ function packageVersion(root) {
 		return "unknown";
 	}
 }
+/** stat 大小；不存在/失败返回 -1（探测绝不能影响启动） */
+function strayFileSize(file) {
+	try {
+		return statSync(file).size;
+	} catch {
+		return -1;
+	}
+}
+/**
+ * 找出「另一处也有 main-config.jsonc」的情况，只读探测，**绝不自动同步**。
+ * 便携版读 <包根>/data/dsh-pet/，DSH 插件模式读 ~/.dsh/dsh-pet/，两份同名同格式但只有一份生效。
+ */
+function findStrayConfig(activeFile, home, root) {
+	const norm = (p) => p.replace(/[\\/]+$/, "").toLowerCase();
+	// root 平时是 <包根>/app，便携版的 home 是 <包根>/data —— 兄弟目录，须上溯一层再比
+	const pkgRoot = norm(join(root, ".."));
+	const homeInsidePackage = norm(home) === pkgRoot || norm(home).startsWith(pkgRoot + "\\");
+	let candidate;
+	let reason;
+	if (homeInsidePackage) {
+		const profile = process.env.USERPROFILE || process.env.HOME || "";
+		if (!profile) return void 0;
+		candidate = join(profile, ".dsh", "dsh-pet", "main-config.jsonc");
+		reason = "便携版不读 ~/.dsh（launcher 把 DSH_HOME 指到了包内 data/），改它不会有任何效果";
+	} else {
+		candidate = join(pkgRoot, "data", "dsh-pet", "main-config.jsonc");
+		reason = "DSH 插件模式读 ~/.dsh，包内这份不参与，改它不会有任何效果";
+	}
+	if (norm(candidate) === norm(activeFile)) return void 0;
+	const size = strayFileSize(candidate);
+	if (size < 0) return void 0;
+	const activeSize = strayFileSize(activeFile);
+	return {
+		file: candidate,
+		reason,
+		size,
+		activeFile,
+		activeSize,
+		sameSize: size === activeSize
+	};
+}
+/** 把 stray 探测结果渲染成给人看的几行（无 stray 时返回空数组） */
+function describeStrayConfig(stray) {
+	if (!stray) return [];
+	const kb = (n) => n < 0 ? "不存在" : `${Math.round(n / 1024)} KB`;
+	const lines = [
+		`⚠ 另有一份配置：${stray.file}（${kb(stray.size)}）—— 不生效`,
+		`  当前生效：${stray.activeFile}（${kb(stray.activeSize)}）`,
+		`  ${stray.reason}`
+	];
+	if (!stray.sameSize) lines.push("  两份大小不同 → 内容不一致，容易改错文件。只改生效那份。");
+	return lines;
+}
 function runCheck(logger) {
 	const home = dshHomeDir();
 	const paths = configPathsFor(packageRoot, home);
@@ -3409,6 +3462,7 @@ function runCheck(logger) {
 		`用户配置        ${paths.userFile}${existsSync(paths.userFile) ? "" : "（不存在 → 用包内默认）"}`,
 		`文件宠物目录    ${paths.petDir}${existsSync(paths.petDir) ? "" : "（不存在）"}`,
 		`内置默认配置    ${paths.defaultFile}${existsSync(paths.defaultFile) ? "" : "  ✗ 缺失"}`,
+		...describeStrayConfig(findStrayConfig(paths.userFile, home, packageRoot)),
 		`Electron        ${electron ?? `未发现（首次运行会下载到 ${electronLandingDir()}）`}`,
 		`图形显示环境    ${hasGraphicalDisplay() ? "有" : "无（桌面小窗会跳过；远程桌面/Xvfb 可设 DSH_PET_DESKTOP_FORCE=1）"}`
 	];
@@ -3810,6 +3864,8 @@ async function run(logger, options) {
 		"  退出        Ctrl+C，或 POST /shutdown",
 		""
 	]) logger.info(line);
+	// 多配置不一致告警：放在横幅之后，用户一定看得到（比埋在 check 里更醒目）
+	for (const line of describeStrayConfig(findStrayConfig(paths.userFile, home, packageRoot))) logger.warn(line);
 	if (context.failures.length > 0) logger.warn(`初始化期间有 ${context.failures.length} 项失败（见上方日志）；路由仍可用，相关端点会显式报错`);
 }
 /** CLI 入口 */

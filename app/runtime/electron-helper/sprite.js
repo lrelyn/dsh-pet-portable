@@ -2554,6 +2554,10 @@ class PetSprite {
     } catch {
       /* 忽略捕获失败 */
     }
+    // 按下瞬间就上报「正在用输入」：不能等 dragState 建好或过阈值 ——
+    // 窗口比宠物身体大一圈，光标一旦移到身体外，主进程就会翻回穿透，
+    // 本窗口随即收不到 pointermove/pointerup（宠物会飞出去，见 pointer-target.js）。
+    this.syncInputBusy();
     // 记录【按下时的指针屏幕坐标】与【按下时的宠物窗口位置】——之后全部用 e.screenX/Y
     // 做增量：指针屏幕坐标与窗口位置无关，不受窗口被逐帧移动影响（window.screenX 会滞后/缓存）。
     // 屏幕坐标是物理像素，除以 CONFIG.scale 进 CSS 系（§3.5）——增量公式两边同一单位。
@@ -2862,6 +2866,10 @@ class PetSprite {
           // 做成网页（使用说明.html）而非 txt：能排标题/表格/勾叉，赞助码直接嵌在
           // 「制作不易」那行下方，一眼能看到又不会盖住正文。用系统默认浏览器打开。
           { label: '使用说明', action: 'open-help' },
+          // 重载配置：手改完 main-config.jsonc 后让它生效（不用重启桌宠）。
+          // 走宿主 POST /reload → syncDesktop()（串行队列 + 等旧 Helper 真退出），
+          // 所以宠物数量 / display / size 的改动也一并生效。
+          { label: '重载配置', action: 'reload' },
           {
             label: '多开数量',
             children: PET_COUNT_OPTIONS.map((n) => ({ label: String(n), action: 'pet-count:' + n })),
@@ -3067,6 +3075,15 @@ class PetSprite {
       const foodId = leaf.action === 'feed' ? undefined : leaf.action.slice(5);
       this.PET_FEED(foodId);
       this._feedCount = (this._feedCount || 0) + 1;
+      return;
+    }
+    // 重载配置：POST /reload → 宿主 syncDesktop() 重启 Helper，全部窗口按最新配置重建。
+    // 不 await 响应（发起者就是即将被重启的 helper，本响应不保证送达 —— 与宿主侧注释一致）。
+    if (leaf.action === 'reload') {
+      this.closeMenu();
+      try {
+        fetch(BASE + '/reload', { method: 'POST' }).catch(() => {});
+      } catch { /* 宿主已退出时 fetch 会抛，忽略 */ }
       return;
     }
     // 状态面板（第四批）：图形化展示四维状态 + 好感度等级

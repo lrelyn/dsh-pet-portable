@@ -6,6 +6,10 @@
 // 纯逻辑层：无 React / DOM 依赖，两边各有一层薄壳做渲染与输入绑定。
 
 import type { MoodConfig } from './mood';
+// 再导出 MoodConfig：types.ts 是「配置结构」的对外门面，调用方
+// （client/config.ts、shared/config.ts）都从 './types' 取类型。
+// 只 import 不 re-export 会让它们报 TS2459（declares locally, but not exported）。
+export type { MoodConfig };
 
 /** 支持的角落 */
 export type Corner = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';

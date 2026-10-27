@@ -1,0 +1,34 @@
+{
+  // tsconfig.json —— 类型检查配置（本项目原本缺失，P2 §4.3 补齐）
+  //
+  // 说明：这个项目在发布时带的是构建产物（app/lib/*.js）和 runtime 的 .js，
+  // 上游用 tsdown 打包，但仓库里没留 tsconfig。补上后 `npm run typecheck` 才有意义。
+  //
+  // 注意：DSH 的私有包（@deepseek-ai/dsh-*）本地装不到（npm 上只有 0.0.1-rc.x，
+  // 项目要求 ^0.2.0-rc.1），所以 src/host 和 src/standalone 的部分文件无法通过
+  // 类型检查。这是环境限制，不是代码问题 —— 见 tests/test-baseline.js。
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    // "types": [] 会禁用所有 @types 包（连 node:test / node:fs 都找不到），
+    // 所以必须显式列出需要的。只列 node：浏览器侧靠 lib 的 DOM 定义。
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": [
+    "node_modules",
+    // 依赖 DSH 私有包的目录：环境装不到那些包，检查必然失败，先从检查范围里排除。
+    // 有 DSH 宿主环境时把它们加回来即可。
+    "src/host",
+    "src/standalone"
+  ]
+}

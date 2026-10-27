@@ -93,17 +93,37 @@ describe('applyEvent —— 事件偏移', () => {
   });
 
   test('MOOD_EVENTS 键集合即业务契约（改它等于改"什么算开心"）', () => {
+    // P2 阶段扩充后共 13 个事件。这份列表是**业务契约**：
+    // 增删任何一项都要同步这里，并确认调用方（sprite.js）真的有触发点，
+    // 否则就是"写了事件但永远不触发"的死条目。
     assert.deepEqual(Object.keys(MOOD_EVENTS).sort(), [
+      'backToWork',
       'balanceLow',
       'balanceRich',
       'click',
+      'feed',
+      'sleep',
       'throwDrag',
+      'wake',
+      'workBigSuccess',
       'workError',
+      'workSlack',
+      'workStart',
       'workSuccess',
     ]);
     // 语义方向：开心向全正、低落向全负
-    for (const k of ['click', 'workSuccess', 'balanceRich']) assert.ok(MOOD_EVENTS[k] > 0, `${k} 应为正`);
-    for (const k of ['workError', 'balanceLow', 'throwDrag']) assert.ok(MOOD_EVENTS[k] < 0, `${k} 应为负`);
+    // 语义方向：开心向全正、低落向全负
+    for (const k of [
+      'click', 'feed', 'workSuccess', 'balanceRich',
+      'wake', 'workStart', 'workSlack', 'workBigSuccess',
+    ]) {
+      assert.ok(MOOD_EVENTS[k] > 0, `${k} 应为正`);
+    }
+    for (const k of [
+      'workError', 'balanceLow', 'throwDrag', 'sleep', 'backToWork',
+    ]) {
+      assert.ok(MOOD_EVENTS[k] < 0, `${k} 应为负`);
+    }
   });
 });
 
@@ -181,9 +201,9 @@ describe('applyMoodFactors —— 分类权重倍率', () => {
 
   test('happy：玩耍/小动作被放大、文字被压小；未配的"吃什么"保持原样', () => {
     const out = applyMoodFactors(cats, 'happy', cfg());
-    assert.equal(out[0].weight, 26); // 小动作 ×1.3
-    assert.equal(out[1].weight, 32); // 玩耍 ×1.6
-    assert.equal(out[2].weight, 6); // 文字 ×0.6
+    assert.equal(out[0].weight, 28); // 小动作 ×1.4（P2 调过）
+    assert.equal(out[1].weight, 36); // 玩耍 ×1.8
+    assert.equal(out[2].weight, 5);  // 文字 ×0.5
   });
 
   test('没写倍率的分类 id → 原 weight（不配即 1）', () => {
@@ -194,8 +214,8 @@ describe('applyMoodFactors —— 分类权重倍率', () => {
 
   test('grumpy：玩耍几乎消失、文字变主角', () => {
     const out = applyMoodFactors(cats, 'grumpy', cfg());
-    assert.equal(out[1].weight, 6); // 玩耍 ×0.3
-    assert.equal(out[2].weight, 10); // 文字 ×1.0
+    assert.equal(out[1].weight, 4);  // 玩耍 ×0.2（P2 调过）
+    assert.equal(out[2].weight, 12); // 文字 ×1.2
   });
 
   test('normal：全 1，返回的数组与入参逐位相等', () => {
@@ -306,8 +326,8 @@ describe('MoodState —— 运行时状态机', () => {
       { id: '玩耍', weight: 20 },
       { id: '文字', weight: 10 },
     ]);
-    assert.equal(out[0].weight, 32); // 玩耍 ×1.6
-    assert.equal(out[1].weight, 6); // 文字 ×0.6
+    assert.equal(out[0].weight, 36); // 玩耍 ×1.8
+    assert.equal(out[1].weight, 5);  // 文字 ×0.5
   });
 
   test('事件不跨档 → 返回 null（不刷屏、不重播引导动画）', () => {

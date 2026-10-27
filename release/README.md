@@ -109,8 +109,8 @@ cd upstream && npm install && npm run ensure:electron
 # 4. 补素材（67 MB）
 Copy-Item "upstream\assets\webm\*" -Destination .\app\assets\webm\ -Recurse
 
-# 5. 还原配置
-Copy-Item config\main-config.jsonc "$env:USERPROFILE\.dsh\dsh-pet\main-config.jsonc" -Force
+# 5. 还原配置（便携版读包内 data\dsh-pet\，不是 ~\.dsh\）
+Copy-Item config\main-config.jsonc .\data\dsh-pet\main-config.jsonc -Force
 
 # 6. 直接跑（不需要 exe）
 .\runtime\node.exe .\app\lib\standalone.js --port 3080

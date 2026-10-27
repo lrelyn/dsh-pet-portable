@@ -42,10 +42,13 @@
 正常的，它在系统托盘里。结束它：任务管理器里结束 `electron.exe`。
 
 **想改配置？**
-编辑 `%USERPROFILE%\.dsh\dsh-pet\main-config.jsonc`（心情阈值、触摸池、动作池都在里面）。注意**不是**项目目录下 `data\dsh-pet\` 那份——那是旧遗留，改了不生效。
+编辑 `data\dsh-pet\main-config.jsonc`（心情阈值、触摸池、动作池、精力/好感度都在里面）。
+
+> ⚠️ 只改这一份。便携版通过 `launcher.js` 把 `DSH_HOME` 指到包内 `data\`，所以 `~\.dsh\dsh-pet\` 那份**完全不参与**——改它不会有任何效果。
+> 判断当前读的是哪份：看启动日志里「配置 <路径>」那一行。
 
 **动作太少 / 想自己加动作？**
-见下方「自己造动作」。放好的 `.webm` 丢进 `%USERPROFILE%\.dsh\dsh-pet\main-animation\webm\` 就行，不用动包内文件。
+见下方「自己造动作」。放好的 `.webm` 丢进 `data\dsh-pet\main-animation\webm\` 就行，不用动 `app\assets\` 里的内置素材。
 
 ## 效果预览
 

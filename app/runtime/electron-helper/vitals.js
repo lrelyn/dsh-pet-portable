@@ -179,13 +179,22 @@ class VitalsState {
    * @returns {{applied:number, refused:boolean}} refused = 太饱了吃不下（文档：hunger>90 拒绝）
    */
   feed(amount) {
+    const events = [];
     const a = Number(amount);
-    if (!Number.isFinite(a) || a <= 0) return { applied: 0, refused: false };
+    if (!Number.isFinite(a) || a <= 0) return { applied: 0, refused: false, events };
     // 太饱了吃不下：文档 §3.2 的"吃饱摆手拒绝"
-    if (this._hunger > 90) return { applied: 0, refused: true };
+    if (this._hunger > 90) return { applied: 0, refused: true, events };
+
+    // 就地发 noLongerHungry（而不是留给 tick）：
+    // 喂食是直接跳变，tick 里的 prevHunger 已是跳变后的值，
+    // 条件 prev<thr && new>=thr 永远不成立 —— 只在 tick 里判就是死代码。
     const before = this._hunger;
+    const thr = (this.cfg.hunger && this.cfg.hunger.hungryThreshold) ?? 30;
     this._hunger = clampVitals(this._hunger + a);
-    return { applied: this._hunger - before, refused: false };
+    if (before < thr && this._hunger >= thr) events.push('noLongerHungry');
+
+    this.lastEvents = events;
+    return { applied: this._hunger - before, refused: false, events };
   }
 
   /** 心情的联动衰减量（/分钟）：饿/累会让心情慢慢掉。返回给调用方叠加到 mood.tick 之外 */

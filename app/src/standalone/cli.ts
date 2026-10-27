@@ -24,7 +24,7 @@ import { existsSync } from 'node:fs';
 import { flattenPetList, readAllConfig } from '../host/config';
 import { dshHomeDir, packageRoot } from '../host/helper-process';
 import { apply } from '../host/index';
-import { runCheck, packageVersion } from './check';
+import { runCheck, packageVersion, describeStrayConfig, findStrayConfig } from './check';
 import {
   createStandaloneContext,
   createStandaloneLogger,
@@ -120,6 +120,10 @@ async function run(logger: StandaloneLogger, options: { port: number }): Promise
     '',
   ]) {
     logger.info(line);
+  }
+  // 多配置不一致告警：放在横幅之后，用户一定看得到（比埋在 check 里更醒目）
+  for (const line of describeStrayConfig(findStrayConfig(paths.userFile, home, packageRoot))) {
+    logger.warn(line);
   }
   if (context.failures.length > 0) {
     logger.warn(`初始化期间有 ${context.failures.length} 项失败（见上方日志）；路由仍可用，相关端点会显式报错`);

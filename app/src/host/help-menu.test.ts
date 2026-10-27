@@ -58,17 +58,30 @@ describe('菜单：死入口「打开网站」必须让位', () => {
   });
 
   test('「使用说明」在「设置」子菜单里置顶（不是菜单顶层）', () => {
-    // 抓到 `label: '设置', children: [ ... ]` 的第一项
-    const m = /label:\s*'设置',\s*children:\s*\[\s*([\s\S]*?)\{\s*label:\s*'多开数量'/.exec(sprite);
+    // ① 先剥掉行注释：本 fork 的「设置」子菜单里有多行说明注释，
+    //    直接对原源码匹配会抓到注释而不是菜单项（这里误判过一次）。
+    const codeOnly = sprite.replace(/^\s*\/\/.*$/gm, '');
+    const m = /label:\s*'设置',\s*children:\s*\[\s*([\s\S]*?)\{\s*label:\s*'多开数量'/.exec(codeOnly);
     assert.ok(m, '找不到「设置」子菜单的起始段');
     assert.ok(
       /label:\s*'使用说明'/.test(m[1]),
       '「设置」的第一项必须是「使用说明」（在设置内置顶），实际是: ' + m[1].replace(/\s+/g, ' ').slice(0, 80),
     );
-    // 顶层 tools 里不得有它
-    const top = /tools\.push\(([\s\S]*?)\{ label: '投喂'/.exec(sprite);
-    assert.ok(top, '找不到 tools.push 段');
-    assert.ok(!/label:\s*'使用说明'/.test(top[1]), '顶层菜单不得有「使用说明」（它属于设置/维护类）');
+    // ② 它必须是「设置」子菜单的第一个 label
+    const firstLabel = /label:\s*'([^']+)'/.exec(m[1]);
+    assert.equal(firstLabel?.[1], '使用说明', '它必须是「设置」子菜单的第一项');
+    // ③ 顶层 tools 段里不得**直接**包含它（它在「设置」的 children 里，不是顶层项）
+    //    判据：把「设置」子菜单整段挖掉后，剩下的顶层段里不应再有它。
+    const topM = /tools\.push\(([\s\S]*?)\n    \);/.exec(codeOnly);
+    assert.ok(topM, '找不到 tools.push 段');
+    const withoutSettings = topM[1].replace(
+      /label:\s*'设置',\s*children:\s*\[[\s\S]*?\n        \],/,
+      '',
+    );
+    assert.ok(
+      !/label:\s*'使用说明'/.test(withoutSettings),
+      '顶层菜单不得直接有「使用说明」（它属于设置/维护类）',
+    );
   });
 
   test('「使用说明」只出现一次（不得同时挂在顶层和设置里）', () => {
