@@ -84,3 +84,5 @@ sea-prep.blob
 /data/electron/
 # 运行时状态快照（含精力/饱食/心情，每人不同）
 /data/dsh-pet/pet-state-*.json
+# 临时输出（截图/调试产物，不进版本控制）
+/out/
