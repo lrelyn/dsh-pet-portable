@@ -101,6 +101,37 @@
         opacity: 0.65;
       }
       /* 四档着色：只染 emoji，文字保持深灰（避免整块彩字在浅色桌面上发飘） */
+      /* 头顶状态图标（P2 §5.1）：纯 emoji，悬浮在宠物正上方。
+         与心情徽标（右上角）错开位置，避免互相遮挡。
+         pointer-events:none 绝不抢命中区；状态消失时 opacity 过渡淡出。 */
+      .pet-status-icon {
+        position: absolute;
+        left: 50%;
+        top: calc(var(--pet-size, 462px) * -0.14);
+        transform: translateX(-50%);
+        font-size: calc(var(--pet-size, 462px) * 0.075);
+        line-height: 1;
+        z-index: 5;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.35s ease, transform 0.35s ease;
+        filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.22));
+        user-select: none;
+      }
+      .pet-status-icon.is-on {
+        opacity: 1;
+      }
+      /* 轻微上下浮动，让图标"活"一点，但不抢主动画注意力 */
+      @keyframes petStatusFloat {
+        0%, 100% { transform: translateX(-50%) translateY(0); }
+        50% { transform: translateX(-50%) translateY(calc(var(--pet-size, 462px) * -0.016)); }
+      }
+      .pet-status-icon.is-on {
+        animation: petStatusFloat 2.4s ease-in-out infinite;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .pet-status-icon.is-on { animation: none; }
+      }
       .pet-mood-happy .pet-mood-emoji {
         filter: drop-shadow(0 0 calc(var(--pet-size, 462px) * 0.008) rgba(255, 176, 32, 0.85));
       }
@@ -228,6 +259,7 @@
     <script src="./affinity.js"></script>
     <script src="./offline.js"></script>
     <!-- 状态面板 + 多宠社交（第四批）。同样必须在 sprite.js 之前。 -->
+    <script src="./status-icons.js"></script>
     <script src="./status-panel.js"></script>
     <script src="./social.js"></script>
     <script src="./sprite.js"></script>

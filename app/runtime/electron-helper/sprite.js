@@ -515,6 +515,14 @@ class PetSprite {
     this.moodEl.appendChild(this.moodEmoji);
     this.moodEl.appendChild(this.moodText);
     this.moodEl.appendChild(this.moodVal);
+    // 头顶状态图标（P2 §5.1）：纯 emoji，无素材成本。
+    // 与心情徽标错开位置（徽标在右上、图标在正上方），避免互相遮挡。
+    this.statusIconEl = document.createElement('div');
+    this.statusIconEl.className = 'pet-status-icon';
+    this.statusIconEl.title = '';
+    this._statusIconSig = '';
+    this._affectionJustUp = false;   // 好感度刚升级（一次性标记）
+    this._boredFlag = false;         // 长时间没玩（一次性标记）
     this.bubble = document.createElement('div');
     this.bubble.className = 'pet-bubble';
 
@@ -523,6 +531,7 @@ class PetSprite {
     stage.appendChild(this.hit);
     this.el.appendChild(this.bubble);
     this.el.appendChild(this.moodEl);
+    this.el.appendChild(this.statusIconEl);
     this.el.appendChild(stage);
     rootEl.appendChild(this.el);
     this.position();
@@ -606,6 +615,7 @@ class PetSprite {
     // 否则最后一次状态变化会丢，离线演化算出来的是旧值。
     try { this.VITALS_Save(); } catch { /* 销毁阶段不抛 */ }
     try { this.PANEL_Close(); } catch { /* 销毁阶段不抛 */ }
+    this.statusIconEl = null;   // 断开 DOM 引用
     // 睡眠兜底定时器同理（8s 接力的那个）
     if (this.PET_SLEEP_Timer) {
       clearTimeout(this.PET_SLEEP_Timer);
@@ -1310,6 +1320,8 @@ class PetSprite {
         this.renderMood();
       }
       console.info('[dsh-pet] 好感度升级 Lv.' + lv.lv + ' ' + lv.name);
+      this._affectionJustUp = true;   // 头顶显示 💗，下次 tick 后清掉
+      this.renderStatusIcon();
     }
     if (r.applied !== 0) this.VITALS_SaveThrottled();
     return r;
@@ -1549,6 +1561,7 @@ class PetSprite {
       }
     } catch { /* 广播失败不影响主体 */ }
 
+    this.renderStatusIcon();   // 头顶状态图标（饿/困/睡），随 vitals 变化
     this.VITALS_SaveThrottled();
   }
 
@@ -1668,22 +1681,40 @@ class PetSprite {
   };
 
   /**
-   * 刷新心情徽标：emoji + 档位 + 数值。
-   * **关闭时摘掉 is-on**（opacity:0 且 transition 收掉，视觉上等于不存在）；
-   * 只在内容真的变了才写 DOM（每次动画结束都会调，无脑写会白烧布局）。
+   * 刷新头顶状态图标（P2 §5.1）。
+   *
+   * 只在**状态键变化**时动 DOM（签名短路），避免每 5 秒 tick 都重设样式。
+   * 多个状态同时存在时只显示最紧急的一个（见 status-icons.js 的优先级表）——
+   * 同时显示多个会变成噪音，反而失去"抬眼就能看懂"的价值。
    */
-  renderMood() {
-    const enabled = this.mood.enabled;
-    const key = enabled ? this.mood.current : 'normal';
-    const val = this.mood.value0.toFixed(0);
-    const sig = (enabled ? '1' : '0') + '|' + key + '|' + val;
-    if (this._moodSig === sig) return;
-    this._moodSig = sig;
-    const label = PetSprite.MOOD_LABEL[key] || PetSprite.MOOD_LABEL.normal;
-    this.moodEmoji.textContent = label.emoji;
-    this.moodText.textContent = label.text;
-    this.moodVal.textContent = val;
-    this.moodEl.className = 'pet-mood' + (enabled ? ' is-on pet-mood-' + key : '');
+  renderStatusIcon() {
+    if (!this.statusIconEl) return;
+    const I = (typeof window !== 'undefined' && window.PET_STATUS_ICONS) ? window.PET_STATUS_ICONS : null;
+    if (!I) return;
+
+    const energy = (this.vitals && this.vitals.enabled) ? this.vitals.energy : 100;
+    const hunger = (this.vitals && this.vitals.enabled) ? this.vitals.hunger : 100;
+    const icon = I.pickIcon({
+      energy,
+      hunger,
+      sleeping: this.PET_SLEEP_On === true,
+      affectionJustUp: this._affectionJustUp === true,
+      bored: this._boredFlag === true,
+    });
+
+    const sig = I.iconSignature(icon);
+    if (sig === this._statusIconSig) return;   // 没变就短路
+    this._statusIconSig = sig;
+
+    if (!icon) {
+      this.statusIconEl.className = 'pet-status-icon';
+      this.statusIconEl.textContent = '';
+      this.statusIconEl.title = '';
+      return;
+    }
+    this.statusIconEl.className = 'pet-status-icon is-on';
+    this.statusIconEl.textContent = icon.emoji;
+    this.statusIconEl.title = icon.text;
   }
 
   /**
@@ -1703,6 +1734,32 @@ class PetSprite {
     return true;
   }
 
+  /**
+   * 清掉一次性状态标记（好感度升级、无聊）。
+   * 这些是"事件型"而非"持续型"，显示一段时间后应消失。
+   */
+  clearTransientIconFlags() {
+    this._affectionJustUp = false;
+    this._boredFlag = false;
+  }
+
+  /**
+   * 刷新心情徽标：emoji + 档位 + 数值。
+   * 只在签名变化时动 DOM（避免每次 tick 都重设），关闭态不加 is-on（徽标不可见）。
+   */
+  renderMood() {
+    const enabled = this.mood.enabled;
+    const key = enabled ? this.mood.current : 'normal';
+    const val = this.mood.value0.toFixed(0);
+    const sig = (enabled ? '1' : '0') + '|' + key + '|' + val;
+    if (this._moodSig === sig) return;
+    this._moodSig = sig;
+    const label = PetSprite.MOOD_LABEL[key] || PetSprite.MOOD_LABEL.normal;
+    this.moodEmoji.textContent = label.emoji;
+    this.moodText.textContent = label.text;
+    this.moodVal.textContent = val;
+    this.moodEl.className = 'pet-mood' + (enabled ? ' is-on pet-mood-' + key : '');
+  }
   handleEnded() { // __feedLockV2
     // 心情时钟：以"动画播完"为天然节拍（不另起定时器）。dt 取真实经过时间，
     // hour 决定回归目标——夜里越待越困，白天自然回暖（与浏览器 pet.ts 同一语义）。
