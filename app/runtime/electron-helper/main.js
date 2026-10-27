@@ -57,6 +57,8 @@ const { HOST_POLL_MS, hostIsGone, isBrokenPipeError, parseHostPid } = require('.
 // 前台窗口检测（独立版 workStatus 触发源）。渲染进程 contextIsolation + nodeIntegration:false
 // 拿不到 child_process，所以检测必须跑在主进程，再经 IPC 推给宠物窗口。
 const { ForegroundWatcher } = require('./foreground-watcher.js');
+// 状态快照的洗白/命名（纯函数，与渲染进程共用同一份实现）
+const { sanitize: sanitizePetState, stateFileName } = require('./pet-state.js');
 
 // 允许无用户手势直接播放（余额动画等）
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
@@ -871,9 +873,7 @@ app.whenReady().then(() => {
   // 只存/取 mood 键，其余字段（宿主的对话记忆）原样保留 —— 读-改-写，
   // 不能直接覆盖整个文件，否则会抹掉对话记忆。
   // 与宿主同一个文件：宿主 standalone.js 里 userRoot = join(dshHome, 'dsh-pet')，
-
   // 所以对话记忆在 data/dsh-pet/memory.json。心情也写这里（只加 mood 键，
-
   // 读-改-写，绝不动 messages），两边共用一份存档。
   const moodMemoryPath = path.join(petPackageRoot, 'data', 'dsh-pet', 'memory.json');
   ipcMain.handle('pet:load-mood', () => {
@@ -905,6 +905,40 @@ app.whenReady().then(() => {
       mkdirSync(path.dirname(moodMemoryPath), { recursive: true });
       writeFileSync(moodMemoryPath, JSON.stringify(obj, null, 2), 'utf8');
       return { ok: true };
+    } catch (e) {
+      return { ok: false, error: String(e && e.message ? e.message : e) };
+    }
+  });
+  // ---- 完整状态快照（pet-state-<id>.json）------------------------------------
+  // 与上面的 memory.json 分开：memory 装宿主管的对话记忆，这里装会随时间演化的
+  // 数值（心情/精力/饱食/好感度）+ 存档时间戳。混在一起宿主改写时会互相踩。
+  // 每只宠物一个文件（多开时各自的精力/饱食独立）。
+  const petStateDir = path.join(petPackageRoot, 'data', 'dsh-pet');
+  const petStatePath = (petId) => path.join(petStateDir, stateFileName(petId));
+
+  ipcMain.handle('pet:load-state', (event, payload) => {
+    try {
+      const id = (payload && payload.petId) || 'main';
+      const file = petStatePath(id);
+      if (!existsSync(file)) return { ok: true, state: null, repaired: [] };
+      const raw = readFileSync(file, 'utf8');
+      let parsed;
+      try { parsed = JSON.parse(raw); }
+      catch { return { ok: true, state: null, repaired: ['(JSON 解析失败)'] }; }
+      const { state, repaired } = sanitizePetState(parsed, new Date());
+      return { ok: true, state, repaired };
+    } catch (e) {
+      return { ok: false, state: null, error: String(e && e.message ? e.message : e) };
+    }
+  });
+
+  ipcMain.handle('pet:save-state', (event, payload) => {
+    try {
+      const id = (payload && payload.petId) || 'main';
+      const { state, repaired } = sanitizePetState(payload && payload.state, new Date());
+      mkdirSync(petStateDir, { recursive: true });
+      writeFileSync(petStatePath(id), JSON.stringify(state, null, 2), 'utf8');
+      return { ok: true, repaired };
     } catch (e) {
       return { ok: false, error: String(e && e.message ? e.message : e) };
     }

@@ -82,3 +82,5 @@ sea-prep.blob
 
 # 独立模式兜底下载的 Electron（launcher 用包内 electron，这份不该留）
 /data/electron/
+# 运行时状态快照（含精力/饱食/心情，每人不同）
+/data/dsh-pet/pet-state-*.json

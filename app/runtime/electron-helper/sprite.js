@@ -263,7 +263,7 @@ class PetSprite {
 
     // 空闲自动进入工作状态：每 5 秒看一眼，够久没人理就让她去做几个工作动作。
     // （睡眠用 PET_SLEEP_Tick 的同款定时器；两者计时变量独立，互不影响。）
-    this._workTimer = setInterval(() => this.WORK_Tick(), 5000);
+    this._workTimer = setInterval(() => { this.WORK_Tick(); this.VITALS_Tick(); }, 5000);
 
     this.pet = pet; // 这只宠物的配置段（拍平后的成品实例，条目级字段已吹入：动画池/权重/周期）
     // 页面级缩放（main 对窗口 setZoomFactor(CONFIG.scale)，见 DESIGN.md §3.5）统一放大整窗：
@@ -336,10 +336,23 @@ class PetSprite {
       mood: this.mood.current,
       value: Number(this.mood.value0.toFixed(1)),
     });
+    // ---- 精力 / 饱食（P2 第一批）----
+    // 与 mood 互补：mood 是分钟级情绪，这两个是按小时演化的"身体状态"。
+    // enabled=false（默认）时 VitalsState 全透传，不消耗任何东西。
+    const vitalsCfg = pet.vitals || config.vitals;
+    this.vitals = (typeof window !== 'undefined' && window.PET_VITALS)
+      ? new window.PET_VITALS.VitalsState(vitalsCfg)
+      : null;
+    this._vitalsRestored = false;
+    this._vitalsSaveAt = 0;
+    this._vitalsLastTick = 0;
+
     // 启动时从 data/memory.json 恢复上次的心情值（P1-4）。
     // 不 await —— 恢复是异步的，不该阻塞宠物首次渲染；
     // 失败（首次运行/文件损坏）静默保持基准值 50。
     this.moodRestore();
+    // 精力/饱食快照恢复（同样不 await，不阻塞首帧）
+    this.vitalsRestore();
     // 交互/移动
     this.dragState = { active: false, dragging: false, sx: 0, sy: 0, petX: 0, petY: 0 };
     this.justDragged = false;
@@ -553,6 +566,9 @@ class PetSprite {
     // 本地工作状态检测：停订阅 + 拆状态机。重载配置会重建 sprite，
     // 不拆的话旧实例会继续响应主进程的 foreground 广播（空转 + 泄漏）。
     try { this.DETECTOR_Stop(); } catch { /* 销毁阶段不抛 */ }
+    // 关闭前把精力/饱食落盘（force 写，不等节流窗口）——
+    // 否则最后一次状态变化会丢，离线演化算出来的是旧值。
+    try { this.VITALS_Save(); } catch { /* 销毁阶段不抛 */ }
     // 睡眠兜底定时器同理（8s 接力的那个）
     if (this.PET_SLEEP_Timer) {
       clearTimeout(this.PET_SLEEP_Timer);
@@ -808,6 +824,8 @@ class PetSprite {
     // 放在 switchTo 之后：先让动画播起来，再更新心情，避免档位切换的 cue 抢掉投喂动画。
     this.lastInteractionAt = now;
     const feedMood = this.mood.event('feed');
+    // 喂食恢复饱食（小鱼干 +15，与文档食物表一致）。vitals 关闭时是空操作。
+    this.VITALS_Feed(15);
     if (feedMood) {
       // 只更新徽标，不播 cue（投喂动画本身已经是反馈，再插一段引导动画会打断它）
       this.renderMood();
@@ -1041,6 +1059,126 @@ class PetSprite {
     console.log('[dsh-pet] pet=' + this.pet.id + ' 心情切档 -> ' + to +
       ' (v=' + this.mood.value0.toFixed(1) + ') 引导动画 ' + name);
     this.playOnce(name);
+  }
+
+  // ---- 精力 / 饱食（P2 第一批）--------------------------------------------
+  //
+  // 三个入口：
+  //   vitalsRestore()      启动时从 pet-state-<id>.json 恢复
+  //   VITALS_Tick()        每拍推进（复用既有定时器，不额外起定时器）
+  //   VITALS_Feed(amount)  喂食
+  //
+  // 与 mood 的关系：mood 是分钟级情绪（事件驱动、快速回归）；这两个是按小时演化的
+  // "身体状态"。enabled=false 时 VitalsState 全透传，不消耗任何东西。
+
+  /** 从 pet-state-<id>.json 恢复精力/饱食（启动时调一次，失败静默走默认值） */
+  async vitalsRestore() {
+    if (this._vitalsRestored) return;
+    this._vitalsRestored = true;
+    if (!this.vitals || !this.vitals.enabled) return;
+    const bridge = window.petBridge;
+    if (!bridge || typeof bridge.loadState !== 'function') return;
+    try {
+      const r = await bridge.loadState(this.pet.id);
+      if (r && r.ok && r.state) {
+        this.vitals.restore(r.state.energy, r.state.hunger);
+        if (r.repaired && r.repaired.length) {
+          console.warn('[dsh-pet] 状态存档有修复字段: ' + r.repaired.join(', '));
+        }
+      }
+      this._vitalsLastTick = Date.now();
+    } catch { /* 首次运行没有存档，正常 */ }
+  }
+
+  /** 每拍推进（由既有定时器调用） */
+  VITALS_Tick() {
+    if (!this.vitals || !this.vitals.enabled) return;
+    const now = Date.now();
+    if (!this._vitalsLastTick) { this._vitalsLastTick = now; return; }
+    const dt = (now - this._vitalsLastTick) / 1000;
+    if (!(dt > 0)) return;
+    this._vitalsLastTick = now;
+
+    // 活动判定：睡眠 > 工作 > 待机
+    let activity = 'idle';
+    if (this.PET_SLEEP_On) activity = 'sleep';
+    else if (this.WORK_On || this.WORK_Busy) activity = 'working';
+    else if (this.workState && this.workState !== 'success' && this.workState !== 'error') activity = 'working';
+
+    const hour = new Date().getHours();
+    const moodVal = this.mood ? this.mood.value0 : 50;
+    const ev = this.vitals.tick(dt, activity, hour, moodVal);
+
+    // 联动：饿/累会让心情慢慢掉（叠加在 mood 自身回归之外）
+    const drain = this.vitals.moodDrainPerMin();
+    if (drain > 0 && this.mood && this.mood.enabled) {
+      this.mood.tick(dt, hour, undefined, drain);
+      this.renderMood();
+    }
+
+    for (const e of ev) {
+      if (e === 'energyLow') {
+        // 精力见底：夜里自动睡，白天先播累的动画
+        const night = (hour >= 22 || hour < 6);
+        if (night) this.PET_SLEEP_Start();
+        else if (this.hasAnim('迷糊犯困')) this.playOnce('迷糊犯困');
+      } else if (e === 'wakeUp') {
+        if (this.PET_SLEEP_On) this.PET_SLEEP_Wake();
+      } else if (e === 'hungry' || e === 'starving') {
+        this.VITALS_SayHungry(e === 'starving');
+      }
+    }
+
+    this.VITALS_SaveThrottled();
+  }
+
+  /** 饿了冒泡（没有宿主通道时静默跳过） */
+  VITALS_SayHungry(starving) {
+    try {
+      const text = starving ? '肚子好饿……真的没力气了' : '肚子有点饿了，有吃的吗';
+      fetch(BASE + '/broadcast?pet=' + encodeURIComponent(this.pet.id), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text }),
+      }).catch(() => {});
+    } catch { /* 宿主不可用不影响主体 */ }
+  }
+
+  /** 喂食：恢复饱食。返回 { applied, refused } 供调用方决定台词 */
+  VITALS_Feed(amount) {
+    if (!this.vitals || !this.vitals.enabled) return { applied: 0, refused: false };
+    const r = this.vitals.feed(amount);
+    if (r.refused) this.showMenuNotice('吃饱啦，等会儿再吃～');
+    this.VITALS_SaveThrottled(true);
+    return r;
+  }
+
+  /** 节流存盘（默认 30 秒一次；force=true 立即写） */
+  VITALS_SaveThrottled(force) {
+    if (!this.vitals || !this.vitals.enabled) return;
+    const now = Date.now();
+    if (!force && now - this._vitalsSaveAt < 30000) return;
+    this._vitalsSaveAt = now;
+    this.VITALS_Save();
+  }
+
+  /** 写完整快照到 pet-state-<id>.json */
+  VITALS_Save() {
+    if (!this.vitals || !this.vitals.enabled) return;
+    const bridge = window.petBridge;
+    if (!bridge || typeof bridge.saveState !== 'function') return;
+    const s = this.vitals.snapshot();
+    const state = {
+      mood: this.mood ? Math.round(this.mood.value0 * 10) / 10 : 50,
+      energy: s.energy,
+      hunger: s.hunger,
+      affinity: 10, // 好感度（下一批实现，先占位）
+      lastSeen: (typeof window.PET_STATE_DATE_KEY === 'function')
+        ? window.PET_STATE_DATE_KEY(new Date())
+        : new Date().toISOString().slice(0, 10),
+      counters: {},
+    };
+    bridge.saveState(this.pet.id, state).catch(() => {});
   }
 
   /**

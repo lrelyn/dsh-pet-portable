@@ -98,6 +98,15 @@ contextBridge.exposeInMainWorld('petBridge', {
   onForeground(cb) {
     ipcRenderer.on('pet:foreground', (e, info) => cb(info));
   },
+  // ---- 完整状态快照（心情/精力/饱食/好感度 + 存档时间）----
+  // 与 memory.json 分开：memory 装宿主的对话记忆，这里装会演化的数值。
+  // 每只宠物一个文件，多开时各自的精力/饱食独立。
+  loadState(petId) {
+    return ipcRenderer.invoke('pet:load-state', { petId });
+  },
+  saveState(petId, state) {
+    return ipcRenderer.invoke('pet:save-state', { petId, state });
+  },
   // 退出桌宠：关掉宿主(node)与宠物窗口，主进程随后自行退出。
   quitPet() {
     ipcRenderer.send('pet:quit');

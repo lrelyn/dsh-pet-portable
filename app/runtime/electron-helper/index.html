@@ -220,6 +220,8 @@
          必须排在 sprite.js 之前：sprite.js 的 DETECTOR_Start 会在运行时读 window.PET_WORK_DETECT。
          注意这里只加载**映射与状态机**；真正的采样在主进程（foreground-watcher.js，需 child_process）。 -->
     <script src="./work-state-map.js"></script>
+    <!-- 精力/饱食状态机（纯逻辑）。同样必须在 sprite.js 之前：sprite 运行时读 window.PET_VITALS。 -->
+    <script src="./vitals.js"></script>
     <script src="./sprite.js"></script>
     <script src="./events.js"></script>
     <script src="./renderer.js"></script>

@@ -59,6 +59,8 @@ async function loadConfig() {
     // sprite.js 的 DETECTOR_Start 读的是 config.workStatusDetector，而 loadConfig
     // 是显式挑字段返回的（不是整块透传），漏了就等于永久 disabled。
     workStatusDetector: (merged && merged.main && merged.main.workStatusDetector) || undefined,
+    // 精力/饱食参数（顶层字段）。同样必须在这里透传 —— loadConfig 是显式挑字段返回的。
+    vitals: (merged && merged.main && merged.main.vitals) || undefined,
   };
 }
 
