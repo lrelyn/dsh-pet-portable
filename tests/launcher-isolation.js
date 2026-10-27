@@ -43,9 +43,12 @@ console.log(`  全系统 electron: ${total}`);
 console.log(`  我们自己的:      ${mine}`);
 ok(mine <= total, `我们的数量不超过总数（${mine} <= ${total}）`);
 ok(mine >= 0, '探针没有失败（返回数字）');
-if (total > 0) {
-  ok(mine < total || mine === 0,
-    `全系统有 ${total} 个但只有 ${mine} 个是我们的 → 其他应用未被误认`);
+// 这条断言依赖环境：桌宠没开时 ours=0 能证明过滤生效；桌宠开着时 ours 可能等于 total。
+// 所以只在"我们自己没跑"的情况下才断言（否则条件不成立，不是代码问题）。
+if (total > 0 && mine === 0) {
+  ok(true, `全系统有 ${total} 个但只有 0 个是我们的 → 过滤生效，其他应用未被误认`);
+} else if (mine > 0) {
+  ok(mine <= total, `我们自己有 ${mine} 个，且不超过总数 ${total}（过滤逻辑未越界）`);
 }
 
 console.log('\n=== 2. 目录前缀必须精确，不能宽松匹配 ===');

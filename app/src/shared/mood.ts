@@ -314,13 +314,20 @@ export class MoodState {
    *  为什么要它：原来心情只有事件驱动，用户不理它时心情恒定不变，
    *  桌宠不会因为被冷落而低落，缺少"需要陪伴"的驱动力。
    *  不传 idleMs = 不做惩罚（老调用方行为不变）。 */
-  tick(dt: number, hour: number, idleMs?: number): MoodKey | null {
+  tick(dt: number, hour: number, idleMs?: number, extraDrainPerMin?: number): MoodKey | null {
     if (!this.enabled) return null;
     this.value = decayValue(this.value, this.cfg.decayPerSec, dt, restValue(hour));
     if (idleMs !== undefined && idleMs > NEGLECT_AFTER_MS && dt > 0) {
       // 只在超过阈值**之后**的那段时间扣，不追溯之前的空闲
       const penalty = NEGLECT_RATE_PER_MIN * (dt / 60);
       this.value = Math.max(0, this.value - penalty);
+    }
+    // 额外衰减（/分钟）：精力/饱食联动 —— 饿/累会让心情额外掉，叠加在自身回归之外。
+    // 供 VitalsState.moodDrainPerMin() 使用。放在 decay 之后、sync 之前：
+    // 一次 tick 只重算一次档位，额外衰减造成的跨档也能被捕获。
+    const extra = Number(extraDrainPerMin);
+    if (Number.isFinite(extra) && extra > 0 && dt > 0) {
+      this.value = Math.max(0, this.value - extra * (dt / 60));
     }
     return this.sync();
   }
