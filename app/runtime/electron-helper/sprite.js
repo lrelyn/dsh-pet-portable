@@ -406,6 +406,20 @@ class PetSprite {
     this.WORK_Played = [];       // 本轮已播过的（用于去重）
     this.WORK_Left = 0;          // 还剩几段（兼容旧字段，WORK_Next 兜底会读）
     this.WORK_StartedAt = 0;     // 上次开始工作的时间戳（冷却用）
+
+    // ---- 本地工作状态检测（独立版 workStatus 触发源）----
+    // 上面的 onWorkTick 读的是 DSH 宿主 /state 的 workStatus 快照。独立版没有宿主事件，
+    // 那 6 段动画 + 18 句台词就一直躺着。这里用「前台窗口 → 档位」把它救活：
+    //   foreground-watcher.js  spawn 一个常驻 PowerShell，每 N 秒读前台窗口（实测 51ms/次）
+    //   work-state-map.js     把 {进程名,标题} 映射成六档，带防抖 + 最小持续 + 久坐里程碑
+    // 只在 pet.workStatusDetector.enabled 时启动；关掉后完全等价原行为。
+    this._detector = null;       // ForegroundWatcher 实例
+    this._stateMachine = null;   // WorkStateMachine 实例
+    this._detectorTimer = null;
+    this._localWorkState = null; // 本地检测出的档位（与宿主的 workState 分开记，避免互相覆盖）
+    this._localDetectOn = false; // 检测是否已启动（幂等守卫）
+    this._lastMilestone = undefined;
+    this.mood = this.mood;       // 占位：mood 已在上面创建，这里只提醒后续代码它可用
     // 对话弹窗（shared 组件）：当前挂载的 close() 句柄 + 开启标记
     // （chatOpen 是穿透守卫：弹窗是窗口内 DOM，期间整窗保持可交互，与 menuOpen 同语义——否则
     //   光标移到输入框（不在身体命中区）就会被 onMouseMove 翻回穿透，点击全被透传）
@@ -535,6 +549,9 @@ class PetSprite {
       clearInterval(this._workTimer);
       this._workTimer = null;
     }
+    // 本地工作状态检测：停订阅 + 拆状态机。重载配置会重建 sprite，
+    // 不拆的话旧实例会继续响应主进程的 foreground 广播（空转 + 泄漏）。
+    try { this.DETECTOR_Stop(); } catch { /* 销毁阶段不抛 */ }
     // 睡眠兜底定时器同理（8s 接力的那个）
     if (this.PET_SLEEP_Timer) {
       clearTimeout(this.PET_SLEEP_Timer);
@@ -1353,6 +1370,102 @@ class PetSprite {
     this.WORK_Left = 0;
     this.WORK_Idle_At = performance.now();
     console.info('[dsh-pet] work run finished, back to random chain');
+  }
+  // ---- 本地工作状态检测（独立版 workStatus 触发源）--------------------------------
+  //
+  // 和上面的 WORK_* 不是一回事：
+  //   WORK_*      = 没人理她时自己找活干（5 分钟无交互触发，纯演出）
+  //   DETECTOR_*  = 看你在干什么，跟着切六档动画（真实反映用户状态）
+  // 宿主模式（DSH 插件）下 onWorkTick 已有数据源；这里只在 workStatusDetector.enabled
+  // 时叠加，独立版靠它把 6 段动画 + 18 句台词救活。
+
+  /** 启动本地检测。幂等：重复调用只启动一次。 */
+  DETECTOR_Start() {
+    if (this._localDetectOn) return;
+    // workStatusDetector 是**顶层字段**（main.workStatusDetector），不是宠物条目字段。
+    // 写法与上面 mood 一致：优先读条目（将来支持单宠覆盖），回落到全局。
+    const cfg = this.pet.workStatusDetector || config.workStatusDetector;
+    if (!cfg || cfg.enabled !== true) return;
+    if (!this.pet.workStatusEnabled) return;
+    if (typeof window === 'undefined' || !window.PET_WORK_DETECT) {
+      console.warn('[dsh-pet] 本地工作状态检测不可用（缺少 PET_WORK_DETECT）');
+      return;
+    }
+    const intervalSec = Number(cfg.detectIntervalSec) > 0 ? Number(cfg.detectIntervalSec) : 5;
+    const sm = new window.PET_WORK_DETECT.WorkStateMachine({
+      confirmCount: cfg.confirmCount,
+      minStateDurationSec: cfg.minStateDurationSec,
+      idleThresholdMin: cfg.idleThresholdMin,
+      workStretchMin: cfg.workStretchMin,
+      longWorkStretchMin: cfg.longWorkStretchMin,
+    });
+    sm.opts = { customRules: Array.isArray(cfg.customRules) ? cfg.customRules : [] };
+    this._stateMachine = sm;
+    // 采样在主进程做（渲染进程拿不到 child_process），这里只订阅结果。
+    // 状态机留在本 renderer：多开时每只宠物的检测参数可能不同，不能共享状态。
+    const bridge = window.petBridge;
+    if (!bridge || typeof bridge.onForeground !== 'function') {
+      console.warn('[dsh-pet] 本地工作状态检测不可用（preload 缺少 onForeground）');
+      return;
+    }
+    bridge.onForeground((info) => this.DETECTOR_OnSample(info));
+    bridge.startForegroundWatch(intervalSec).catch(() => {});
+    this._localDetectOn = true;
+    console.info('[dsh-pet] 本地工作状态检测已启动（每 ' + intervalSec + 's 一次）');
+  }
+
+  /** 停止本地检测（dispose / 配置热重载时调）。 */
+  DETECTOR_Stop() {
+    if (this._localDetectOn) {
+      const bridge = window.petBridge;
+      if (bridge && typeof bridge.stopForegroundWatch === 'function') {
+        bridge.stopForegroundWatch();
+      }
+      this._localDetectOn = false;
+    }
+    this._stateMachine = null;
+    this._localWorkState = null;
+  }
+
+  /** 一拍采样 -> 状态机 -> 驱动动画 + 心情联动。 */
+  DETECTOR_OnSample(sample) {
+    if (!this._stateMachine) return;
+    const r = this._stateMachine.feed(sample, Date.now());
+    if (!r) return;
+    if (r.milestone) this.DETECTOR_Milestone(r.milestone);
+    if (!r.changed || !r.state) return;
+    const prev = this._localWorkState;
+    if (r.state === prev) return;
+    this._localWorkState = r.state;
+    // 心情联动。幅度比文档 2.5 收窄：真实窗口切换远比 DSH 事件频繁，
+    // 用原设计的 +3/+12 会几分钟把心情顶满，反而失去意义。
+    if (this.mood && this.mood.enabled) {
+      let ev = null;
+      if (r.state === 'working' && prev !== 'working') ev = 'workStart';
+      else if (r.state === 'result' && prev === 'working') ev = 'workSlack';
+      else if (r.state === 'thinking' && prev === 'result') ev = 'backToWork';
+      if (ev) {
+        const to = this.mood.event(ev);
+        if (to) this.moodCue(to);
+        this.renderMood();
+        this.moodSaveThrottled();
+      }
+    }
+    // 驱动动画：复用宿主那条链路的同一个函数（气泡驻留 / 循环语义完全一致）
+    window.__dshPetWorkTick = (window.__dshPetWorkTick || 0) + 1;
+    this.onWorkTick({ state: r.state, task: null }, window.__dshPetWorkTick);
+  }
+
+  /** 久坐里程碑：25 分钟（完成一段）/ 50 分钟（该休息了）。 */
+  DETECTOR_Milestone(kind) {
+    const isLong = kind === 'longDone';
+    if (this.mood && this.mood.enabled) {
+      const to = this.mood.event(isLong ? 'workBigSuccess' : 'workSuccess');
+      if (to) this.moodCue(to);
+      this.renderMood();
+      this.moodSaveThrottled();
+    }
+    console.info('[dsh-pet] 久坐里程碑：' + (isLong ? '50 分钟，该休息了' : '25 分钟，完成一段'));
   }
 
   /** 用户交互（拖拽 / 点击）时中断工作状态，剩余次数清零。 */

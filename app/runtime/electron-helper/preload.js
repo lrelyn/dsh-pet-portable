@@ -85,6 +85,19 @@ contextBridge.exposeInMainWorld('petBridge', {
   saveMood(mood) {
     return ipcRenderer.invoke('pet:save-mood', { mood });
   },
+  // ---- 前台窗口采样（独立版 workStatus 触发源）----
+  // 渲染进程拿不到 child_process，采样在主进程做（一个进程服务所有宠物窗口），
+  // 这里只负责「请求开始/停止」和「订阅采样结果」。状态机仍在各自 renderer 里跑
+  // —— 多开时每只宠物的检测参数可能不同，不能共享状态。
+  startForegroundWatch(intervalSec) {
+    return ipcRenderer.invoke('pet:foreground-start', { intervalSec });
+  },
+  stopForegroundWatch() {
+    ipcRenderer.send('pet:foreground-stop');
+  },
+  onForeground(cb) {
+    ipcRenderer.on('pet:foreground', (e, info) => cb(info));
+  },
   // 退出桌宠：关掉宿主(node)与宠物窗口，主进程随后自行退出。
   quitPet() {
     ipcRenderer.send('pet:quit');

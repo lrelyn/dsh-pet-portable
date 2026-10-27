@@ -54,6 +54,9 @@ const fsPromises = require('node:fs/promises');
 const { decideWindowIgnore } = require('./pointer-target.js');
 // 宿主存活判定（issue #56：宿主退出 → 管道断开 → 自己退，绝不弹框、绝不留僵尸）
 const { HOST_POLL_MS, hostIsGone, isBrokenPipeError, parseHostPid } = require('./host-liveness.js');
+// 前台窗口检测（独立版 workStatus 触发源）。渲染进程 contextIsolation + nodeIntegration:false
+// 拿不到 child_process，所以检测必须跑在主进程，再经 IPC 推给宠物窗口。
+const { ForegroundWatcher } = require('./foreground-watcher.js');
 
 // 允许无用户手势直接播放（余额动画等）
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
@@ -905,6 +908,58 @@ app.whenReady().then(() => {
     } catch (e) {
       return { ok: false, error: String(e && e.message ? e.message : e) };
     }
+  });
+
+  // ---- 前台窗口检测（独立版 workStatus 触发源）--------------------------------
+  // 渲染进程拿不到 child_process，所以检测跑在这里：一个 ForegroundWatcher 进程
+  // 服务所有宠物窗口，采样结果广播给每个 renderer，由它们各自做状态机 + 动画。
+  //
+  // 为什么主进程只做「采样」不做「映射」：多开时每只宠物的检测配置（间隔/防抖/自定义
+  // 规则）可能不同，状态机必须在各 renderer 内独立跑，否则 12 只宠物共享一个状态机会
+  // 互相打架。主进程只负责昂贵的部分（PowerShell 进程），这是最省资源的切分。
+  let fgWatcher = null;
+  let fgIntervalSec = 0;
+
+  const broadcastForeground = (info) => {
+    for (const w of BrowserWindow.getAllWindows()) {
+      try {
+        if (w.isDestroyed()) continue;
+        w.webContents.send('pet:foreground', info);
+      } catch { /* 单个窗口异常不影响其它窗口 */ }
+    }
+  };
+
+  /** 启动/调整采样频率（幂等：参数没变就不重启） */
+  const ensureForegroundWatcher = (intervalSec) => {
+    const sec = Number(intervalSec) > 0 ? Number(intervalSec) : 0;
+    if (sec === 0) {
+      // 0 = 关闭：所有宠物都关掉了检测
+      if (fgWatcher) {
+        fgWatcher.stop();
+        fgWatcher = null;
+        fgIntervalSec = 0;
+      }
+      return;
+    }
+    if (fgWatcher && fgIntervalSec === sec) return;
+    if (fgWatcher) { fgWatcher.stop(); fgWatcher = null; }
+    fgIntervalSec = sec;
+    fgWatcher = new ForegroundWatcher({ intervalSec: sec, onSample: broadcastForeground });
+    fgWatcher.start();
+  };
+
+  ipcMain.handle('pet:foreground-start', (event, payload) => {
+    try {
+
+      ensureForegroundWatcher(payload && payload.intervalSec);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: String(e && e.message ? e.message : e) };
+    }
+  });
+
+  ipcMain.on('pet:foreground-stop', () => {
+    ensureForegroundWatcher(0);
   });
 
   // ---- 退出桌宠 ------------------------------------------------------------

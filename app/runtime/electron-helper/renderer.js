@@ -55,6 +55,10 @@ async function loadConfig() {
     physics: (merged && merged.main && merged.main.physics) || S.DEFAULT_PHYSICS,
     // 抛掷锁定在当前屏幕（根字段；合并器已填内置默认 false）
     confineToScreen: (merged && merged.main && merged.main.confineToScreen) === true,
+    // 独立版工作状态检测参数（顶层字段）。**必须在这里透传**：
+    // sprite.js 的 DETECTOR_Start 读的是 config.workStatusDetector，而 loadConfig
+    // 是显式挑字段返回的（不是整块透传），漏了就等于永久 disabled。
+    workStatusDetector: (merged && merged.main && merged.main.workStatusDetector) || undefined,
   };
 }
 
@@ -82,6 +86,10 @@ async function boot() {
     window.__dshPetDebug.configOk = true;
     window.__dshPetDebug.spriteCount = sprites.length;
     for (const s of sprites) s.playIdle();
+    // 独立版工作状态检测：把「前台窗口 → 六档」的触发源接上。
+    // 内部有 enabled 门控（workStatusDetector.enabled !== true 直接返回），
+    // 所以这里无条件调用，不需要在外层再判一次开关。
+    for (const s of sprites) s.DETECTOR_Start();
     startLoops();
   } catch (e) {
     showError('配置加载失败：' + (e && e.message ? String(e.message) : String(e)));

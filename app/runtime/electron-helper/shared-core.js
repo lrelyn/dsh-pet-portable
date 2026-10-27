@@ -90,7 +90,11 @@ const MOOD_EVENTS = {
 	balanceRich: 8,
 	balanceLow: -12,
 	sleep: -5,
-	wake: 3
+	wake: 3,
+	workStart: 2,
+	workSlack: 3,
+	backToWork: -1,
+	workBigSuccess: 10
 };
 const NEGLECT_AFTER_MS = 5 * 60 * 1000;
 const NEGLECT_RATE_PER_MIN = 0.5;

@@ -216,6 +216,10 @@
          桌面端同模式拆分：constants（基础设施）→ sprite（宠物本体）→ events（事件联动）→ renderer（启动入口） -->
     <script src="./shared-core.js"></script>
     <script src="./constants.js"></script>
+    <!-- 前台窗口 → 工作状态映射（纯逻辑，独立版 workStatus 的触发源）。
+         必须排在 sprite.js 之前：sprite.js 的 DETECTOR_Start 会在运行时读 window.PET_WORK_DETECT。
+         注意这里只加载**映射与状态机**；真正的采样在主进程（foreground-watcher.js，需 child_process）。 -->
+    <script src="./work-state-map.js"></script>
     <script src="./sprite.js"></script>
     <script src="./events.js"></script>
     <script src="./renderer.js"></script>

@@ -115,6 +115,11 @@ export const MOOD_EVENTS: Record<string, number> = {
   balanceLow: -12, // 余额 < 20%（袋空如洗）
   // —— 作息 ——
   sleep: -5, // 进入睡眠（她困了，心情略微下沉）
+  // —— 本地工作状态检测（独立版；幅度刻意小于 workSuccess，见 sprite.js DETECTOR_OnSample 注释）——
+  workStart: 2, // 检测到开始干活（切到 working 档）
+  workSlack: 3, // 忙完一段在歇着（切到 result 档，摸鱼有快感）
+  backToWork: -1, // 歇完又得干活（切回 thinking 档）
+  workBigSuccess: 10, // 连续工作 50 分钟（久坐里程碑）
   wake: 3, // 醒来（睡饱了心情好一点）
 };
 
