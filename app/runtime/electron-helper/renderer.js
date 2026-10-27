@@ -65,6 +65,7 @@ async function loadConfig() {
     // loadConfig 是挑字段返回的，漏了就等于永久 disabled（这个坑已踩过两次）。
     affinity: (merged && merged.main && merged.main.affinity) || undefined,
     offline: (merged && merged.main && merged.main.offline) || undefined,
+    petInteraction: (merged && merged.main && merged.main.petInteraction) || undefined,
   };
 }
 

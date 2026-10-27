@@ -263,7 +263,7 @@ class PetSprite {
 
     // 空闲自动进入工作状态：每 5 秒看一眼，够久没人理就让她去做几个工作动作。
     // （睡眠用 PET_SLEEP_Tick 的同款定时器；两者计时变量独立，互不影响。）
-    this._workTimer = setInterval(() => { this.WORK_Tick(); this.VITALS_Tick(); }, 5000);
+    this._workTimer = setInterval(() => { this.WORK_Tick(); this.VITALS_Tick(); this.SOCIAL_Tick(); }, 5000);
 
     this.pet = pet; // 这只宠物的配置段（拍平后的成品实例，条目级字段已吹入：动画池/权重/周期）
     // 页面级缩放（main 对窗口 setZoomFactor(CONFIG.scale)，见 DESIGN.md §3.5）统一放大整窗：
@@ -362,6 +362,17 @@ class PetSprite {
     // 注意：推演必须在 vitalsRestore 之前完成，否则会先用旧值再推演导致双重计算。
     this._offlinePending = true;
     this._offlineResult = null;
+    // ---- 状态面板 + 多宠社交（第四批）----
+    this._panelEl = null;              // 状态面板 DOM（打开时创建，关闭时移除）
+    this._panelOpen = false;
+    // 社交：复用已有的跨窗口位置广播（reportFlight/onFlightStates），
+    // 在 it 的基础上加关系值和互动调度。只有 petInteraction.enabled 才启用。
+    const socialCfg = pet.petInteraction || config.petInteraction;
+    this.social = (typeof window !== 'undefined' && window.PET_SOCIAL && socialCfg && socialCfg.enabled)
+      ? new window.PET_SOCIAL.SocialScheduler(socialCfg)
+      : null;
+    this._lastSocialScan = 0;
+
 
 
     // 启动时从 data/memory.json 恢复上次的心情值（P1-4）。
@@ -594,6 +605,7 @@ class PetSprite {
     // 关闭前把精力/饱食落盘（force 写，不等节流窗口）——
     // 否则最后一次状态变化会丢，离线演化算出来的是旧值。
     try { this.VITALS_Save(); } catch { /* 销毁阶段不抛 */ }
+    try { this.PANEL_Close(); } catch { /* 销毁阶段不抛 */ }
     // 睡眠兜底定时器同理（8s 接力的那个）
     if (this.PET_SLEEP_Timer) {
       clearTimeout(this.PET_SLEEP_Timer);
@@ -1303,6 +1315,154 @@ class PetSprite {
     return r;
   }
 
+  // ---- 多宠社交（第四批）--------------------------------------------------
+  //
+  // 复用已有的跨窗口位置广播：`this.others` 里就存着其它宠物的最新位置
+  // （由 preload 的 onFlightStates 每 ~30ms 刷新）。社交只做「靠近 → 触发互动」。
+  //
+  // 为什么不做双角色动画：没有那个素材。改成单角色动画 + 位置对齐
+  //（文档 §6.4 的方案 B，成本低且不需要新素材）。
+
+  /** 定期扫描周围宠物（由既有 _workTimer 每 5 秒调一次，不额外起定时器） */
+  SOCIAL_Tick() {
+    if (!this.social) return;
+    const now = Date.now();
+    if (now - this._lastSocialScan < 5000) return;   // 最多 5 秒一次
+    this._lastSocialScan = now;
+
+    const others = this.others ? Object.entries(this.others) : [];
+    if (!others.length) return;
+
+    const me = {
+      id: this.pet.id,
+      x: this.pos.x, y: this.pos.y,
+      mood: this.mood ? this.mood.value0 : 50,
+      energy: (this.vitals && this.vitals.enabled) ? this.vitals.energy : 100,
+    };
+    const list = others.map(([id, s]) => ({
+      id,
+      x: Number(s && s.x) || 0,
+      y: Number(s && s.y) || 0,
+      mood: 50,    // 其它宠物的心情不广播（省带宽），当普通值处理
+      energy: 100,
+    }));
+
+    const hit = this.social.scan(me, list, now);
+    if (!hit) return;
+
+    const S = window.PET_SOCIAL;
+    const def = S && S.INTERACTIONS ? S.INTERACTIONS[hit.type] : null;
+    if (!def) return;
+
+    // 更新关系值
+    const rel = this.social.record(hit.target, hit.type);
+    console.info('[dsh-pet] 多宠互动：' + def.desc + '（与 ' + hit.target +
+      ' 的关系 ' + rel.toFixed(0) + '）');
+
+    // 播动画（单角色 + 位置对齐：往对方方向靠一点）
+    if (def.anim && this.hasAnim(def.anim)) {
+      this.stopMove();
+      this.playOnce(def.anim);
+    }
+
+    // 心情 / 好感度联动
+    if (def.mood && this.mood && this.mood.enabled) {
+      // 用已有事件名承载（不新增事件）：正向用 workSlack，负向用 workError
+      const p = def.mood > 0 ? this.mood.event('workSlack') : this.mood.event('workError');
+      if (p) this.moodCue(p);
+      this.renderMood();
+    }
+    if (def.affinity > 0) this.AFFINITY_Interact('play');
+    this.VITALS_SaveThrottled();
+  }
+
+  // ---- 状态面板（第四批）--------------------------------------------------
+  //
+  // 做成窗口内浮层而不是新开 Electron 窗口：新窗口要改 main.js 的窗口管理、
+  // 加 IPC、处理层级与穿透，成本高且容易和「宠物窗口单实例」逻辑打架。
+  // 现有菜单/气泡/聊天弹窗都是窗口内 DOM + 穿透守卫，这里沿用同一套做法。
+
+  /** 汇总当前四维状态（供面板显示） */
+  STATUS_Snapshot() {
+    const moodV = this.mood ? this.mood.value0 : 50;
+    const energyV = (this.vitals && this.vitals.enabled) ? this.vitals.energy : 100;
+    const hungerV = (this.vitals && this.vitals.enabled) ? this.vitals.hunger : 100;
+    const aff = this.AFFINITY_Summary();
+    let days = 0;
+    try {
+      // 陪伴天数：从好感度首次记录算起（粗略：按 lastSeen 与今天的天数差 +1）
+      const ls = this.affinity && this.affinity.lastSeen;
+      if (ls) {
+        const d = Math.floor((Date.now() - new Date(ls + 'T00:00:00').getTime()) / 86400000);
+        days = Math.max(1, d + 1);
+      }
+    } catch { days = 0; }
+    return {
+      mood: moodV, energy: energyV, hunger: hungerV,
+      affinity: aff, stats: { days, feeds: this._feedCount || 0 },
+    };
+  }
+
+  /** 打开状态面板（幂等：已开则不重复创建） */
+  PANEL_Open() {
+    if (this._panelOpen && this._panelEl) return;
+    const SP = (typeof window !== 'undefined' && window.PET_STATUS_PANEL) ? window.PET_STATUS_PANEL : null;
+    if (!SP) {
+      this.showMenuNotice('状态面板不可用（模块未加载）');
+      return;
+    }
+    // 注入样式（只注入一次）
+    if (!document.getElementById('pet-panel-style')) {
+      const st = document.createElement('style');
+      st.id = 'pet-panel-style';
+      st.textContent = SP.CSS;
+      document.head.appendChild(st);
+    }
+    const el = document.createElement('div');
+    el.className = 'pet-panel';
+    el.innerHTML =
+      '<div class="pet-panel-title"><span>她的状态</span>' +
+      '<span class="pet-panel-close" data-pet-panel-close="1">✕</span></div>' +
+      SP.buildPanelHtml(this.STATUS_Snapshot());
+    // 关闭按钮
+    el.addEventListener('click', (ev) => {
+      const t = ev.target;
+      if (t && t.getAttribute && t.getAttribute('data-pet-panel-close')) {
+        ev.stopPropagation();
+        this.PANEL_Close();
+      }
+    });
+    // 位置：宠物上方，超出窗口就贴边
+    const rect = this.el.getBoundingClientRect ? this.el.getBoundingClientRect() : null;
+    const winW = window.innerWidth || 400, winH = window.innerHeight || 300;
+    const panelW = 292, panelH = 250;
+    let left = rect ? rect.left + rect.width / 2 - panelW / 2 : 20;
+    left = Math.max(8, Math.min(left, winW - panelW - 8));
+    let top = rect ? rect.top - panelH - 8 : 20;
+    if (top < 8) top = (rect ? rect.bottom + 8 : 20);
+    top = Math.max(8, Math.min(top, winH - panelH - 8));
+    el.style.left = Math.round(left) + 'px';
+    el.style.top = Math.round(top) + 'px';
+
+    document.body.appendChild(el);
+    this._panelEl = el;
+    this._panelOpen = true;
+    // 面板是窗口内 DOM：期间整窗要保持可交互，否则光标移出身体命中区就会被翻回穿透
+    this.menuOpen = true;
+    this.syncInputBusy && this.syncInputBusy();
+  }
+
+  /** 关闭状态面板 */
+  PANEL_Close() {
+    if (this._panelEl) {
+      try { this._panelEl.remove(); } catch {}
+      this._panelEl = null;
+    }
+    this._panelOpen = false;
+    this.menuOpen = false;
+    this.syncInputBusy && this.syncInputBusy();
+  }
+
   /** 好感度加成的正收益系数（1.0~1.5），供 mood 事件放大用 */
   AFFINITY_Bonus() {
     if (!this.affinity || !this.affinity.enabled) return 1;
@@ -1373,6 +1533,21 @@ class PetSprite {
         this.VITALS_SayHungry(e === 'starving');
       }
     }
+
+    // 常态位置上报（多宠社交需要）：reportFlight 原本只在被甩飞时上报，
+    // 静止/走路时 others 恒空 → 社交永远触发不了。这里每 5 秒补一次，
+    // 复用同一 broker 通道（不新增 IPC），碰撞检测也会因此受益。
+    try {
+      if (window.petBridge && window.petBridge.reportFlight) {
+        window.petBridge.reportFlight({
+          x: toScreen(this.pos.x),
+          y: toScreen(this.pos.y),
+          vx: 0, vy: 0,
+          size: toScreen(this.size),
+          bottomPad: toScreen(this.bottomPad),
+        });
+      }
+    } catch { /* 广播失败不影响主体 */ }
 
     this.VITALS_SaveThrottled();
   }
@@ -2609,6 +2784,8 @@ class PetSprite {
       // 顶层不再重复列出「重载配置」，避免同一个功能在菜单里出现两次。
       // 固定入口，handler 内部仍会自行校验，所以关着余额也不会出错。
       { label: '投喂', action: 'feed' },
+      // 状态面板（第四批）：图形化展示四维状态 + 好感度等级
+      { label: '她的状态', action: 'status-panel' },
       {
         label: '设置',
         children: [
@@ -2818,6 +2995,13 @@ class PetSprite {
     // 投喂: 播吃小鱼干, 随后冒一句台词（走 host, 气泡槽与碎碎念共用）
     if (leaf.action === 'feed') {
       this.PET_FEED();
+      this._feedCount = (this._feedCount || 0) + 1;
+      return;
+    }
+    // 状态面板（第四批）：图形化展示四维状态 + 好感度等级
+    if (leaf.action === 'status-panel') {
+      this.closeMenu();
+      this.PANEL_Open();
       return;
     }
     if (!leaf.anim) return;
