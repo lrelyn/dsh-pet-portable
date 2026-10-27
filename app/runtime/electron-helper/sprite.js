@@ -418,6 +418,7 @@ class PetSprite {
     this._detectorTimer = null;
     this._localWorkState = null; // 本地检测出的档位（与宿主的 workState 分开记，避免互相覆盖）
     this._localDetectOn = false; // 检测是否已启动（幂等守卫）
+    this.workInterleave = 0; // 工作动画交替计数（每 2 段插一次随机待机，见 resumeWorkStatusAnim）
     this._lastMilestone = undefined;
     this.mood = this.mood;       // 占位：mood 已在上面创建，这里只提醒后续代码它可用
     // 对话弹窗（shared 组件）：当前挂载的 close() 句柄 + 开启标记
@@ -1579,6 +1580,16 @@ class PetSprite {
     const state = this.workState;
     if (!state || state === 'success' || state === 'error') return false;
     const pool = this.animations.events?.workStatus;
+    // 单候选档位不再无限 loop（见 events.js onWorkTick 注释）。这里控制交替节奏：
+    // 每播完 2 段工作动画，插一次随机待机，让"平常动作"继续出现。
+    // 为什么是 2：工作动画单段约 3~5 秒，2 段≈8 秒 —— 既有持续工作感，
+    // 又不至于让随机链消失太久；用户切窗口频率远高于 8 秒，切换时计数会重置。
+    if (this.workInterleave === undefined) this.workInterleave = 0;
+    this.workInterleave += 1;
+    if (this.workInterleave > 2) {
+      this.workInterleave = 0;
+      return false; // 交给调用方走随机链
+    }
     if (!pool || pool.length === 0) return false;
     const idx = S.WORK_STATUS_INDEX[state];
     const slot = pool[idx];

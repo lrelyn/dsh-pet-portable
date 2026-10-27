@@ -19,6 +19,8 @@ PetSprite.prototype.onWorkTick = function onWorkTick(snapshot, tick) {
   this.workState = state; // 当前工作状态：互动/事件动画播完恢复档位循环用（与浏览器 workStatusRef 同用途）
   const stateChanged = this.prevWorkState !== state;
   this.prevWorkState = state;
+  // 状态变了 → 重置交替计数：新状态下应该先连续播几段，而不是立刻插随机动作
+  if (stateChanged) this.workInterleave = 0;
   if (!state) {
     // 回空闲：把正在**循环播**的进行中档位动画改成"播完即停"（与浏览器 src/client/pet.ts 的空闲分支
     // 同一处修复）。进行中档位走 switchTo(name, false)（el.loop=true、el.onended=null），ended 永不
@@ -99,8 +101,13 @@ PetSprite.prototype.onWorkTick = function onWorkTick(snapshot, tick) {
     if (to) this.moodCue(to);
   }
   this.renderMood();
-  if (terminal || rotating) this.playOnce(name);
-  else this.switchTo(name, false); // 进行中循环播（单动画/单候选档位）
+  // 单候选档位也要 playOnce（而不是无限循环），理由：
+  //   switchTo(name, false) 会把 el.loop 设为 true、onended 设为 null → handleEnded 永不触发 →
+  //   随机链彻底停住，桌宠卡在同一个工作动画上无限重复。DSH 插件模式下工作状态是短脉冲
+  //   （几秒一次工具调用），不明显；本地检测按分钟级持续，这个缺陷会暴露成"平常动作不播了"。
+  // 改成 playOnce 后，handleEnded 每播完一段都会走 resumeWorkStatusAnim，由那里的
+  // workStatusInterleave 决定"继续播工作动画"还是"先播一个随机待机动作再回来"。
+  this.playOnce(name);
 };
 
 // ---- 余额事件（每只宠物按 balanceEnabled 门控；档位与气泡内容来自 shared） ----
