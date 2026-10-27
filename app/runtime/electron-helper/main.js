@@ -944,6 +944,14 @@ app.whenReady().then(() => {
     }
   });
 
+  // 诊断通道：渲染进程不能写文件，只能经主进程落日志（排查离线推演/心情变更用）
+  ipcMain.on('pet:diag', (event, msg) => {
+    try {
+      fsPromises.appendFile(path.join(petPackageRoot, 'pet.log'),
+        '[' + new Date().toISOString() + '] ' + String(msg) + '\n');
+    } catch { /* 诊断失败不影响主体 */ }
+  });
+
   // ---- 前台窗口检测（独立版 workStatus 触发源）--------------------------------
   // 渲染进程拿不到 child_process，所以检测跑在这里：一个 ForegroundWatcher 进程
   // 服务所有宠物窗口，采样结果广播给每个 renderer，由它们各自做状态机 + 动画。

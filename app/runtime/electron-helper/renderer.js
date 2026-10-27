@@ -61,6 +61,10 @@ async function loadConfig() {
     workStatusDetector: (merged && merged.main && merged.main.workStatusDetector) || undefined,
     // 精力/饱食参数（顶层字段）。同样必须在这里透传 —— loadConfig 是显式挑字段返回的。
     vitals: (merged && merged.main && merged.main.vitals) || undefined,
+    // 好感度 + 离线演化的参数（顶层字段）。同 vitals 一样必须显式透传 ——
+    // loadConfig 是挑字段返回的，漏了就等于永久 disabled（这个坑已踩过两次）。
+    affinity: (merged && merged.main && merged.main.affinity) || undefined,
+    offline: (merged && merged.main && merged.main.offline) || undefined,
   };
 }
 

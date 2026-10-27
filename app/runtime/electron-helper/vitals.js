@@ -15,7 +15,7 @@
 //   3. 四维联动按文档 §2 实现，但系数保守 —— 桌宠是陪玩用的，不是养成压力工具。
 'use strict';
 
-const clamp = (v) => (v < 0 ? 0 : v > 100 ? 100 : v);
+const clampVitals = (v) => (v < 0 ? 0 : v > 100 ? 100 : v);
 
 /** 活动类型 → 精力消耗/恢复速率（/分钟） */
 const ACTIVITY = {
@@ -90,8 +90,8 @@ class VitalsState {
     this.cfg = cfg || DEFAULT_VITALS_CONFIG;
     const ec = this.cfg.energy || {};
     const hc = this.cfg.hunger || {};
-    this._energy = clamp(Number(init && init.energy) || Number(ec.initial) || 80);
-    this._hunger = clamp(Number(init && init.hunger) || Number(hc.initial) || 70);
+    this._energy = clampVitals(Number(init && init.energy) || Number(ec.initial) || 80);
+    this._hunger = clampVitals(Number(init && init.hunger) || Number(hc.initial) || 70);
     // 最近一次产生的事件（调用方可以读它决定要不要播动画）
     this.lastEvents = [];
   }
@@ -146,7 +146,7 @@ class VitalsState {
       }
     }
     const prevEnergy = this._energy;
-    this._energy = clamp(this._energy + dEnergy);
+    this._energy = clampVitals(this._energy + dEnergy);
 
     // ---- 饱食 ----
     let drainH;
@@ -154,7 +154,7 @@ class VitalsState {
     else if (activity === 'working') drainH = Number(hc.workDrainPerMin ?? 0.6);
     else drainH = Number(hc.drainPerMin ?? 0.4);
     const prevHunger = this._hunger;
-    this._hunger = clamp(this._hunger - drainH * mins);
+    this._hunger = clampVitals(this._hunger - drainH * mins);
 
     // ---- 跨阈值事件 ----
     const autoSleep = Number(ec.autoSleepThreshold ?? 15);
@@ -184,7 +184,7 @@ class VitalsState {
     // 太饱了吃不下：文档 §3.2 的"吃饱摆手拒绝"
     if (this._hunger > 90) return { applied: 0, refused: true };
     const before = this._hunger;
-    this._hunger = clamp(this._hunger + a);
+    this._hunger = clampVitals(this._hunger + a);
     return { applied: this._hunger - before, refused: false };
   }
 
@@ -201,8 +201,8 @@ class VitalsState {
   /** 读档 */
   restore(e, h) {
     const ne = Number(e), nh = Number(h);
-    if (Number.isFinite(ne)) this._energy = clamp(ne);
-    if (Number.isFinite(nh)) this._hunger = clamp(nh);
+    if (Number.isFinite(ne)) this._energy = clampVitals(ne);
+    if (Number.isFinite(nh)) this._hunger = clampVitals(nh);
   }
 
   /** 存盘 */
@@ -222,7 +222,7 @@ const __vitalsApi = {
   energyBand,
   hungerBand,
   isNightHour,
-  clamp,
+  clamp: clampVitals,
 };
 if (typeof module !== 'undefined' && module.exports) module.exports = __vitalsApi;
 if (typeof window !== 'undefined') window.PET_VITALS = __vitalsApi;

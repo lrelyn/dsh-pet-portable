@@ -222,6 +222,11 @@
     <script src="./work-state-map.js"></script>
     <!-- 精力/饱食状态机（纯逻辑）。同样必须在 sprite.js 之前：sprite 运行时读 window.PET_VITALS。 -->
     <script src="./vitals.js"></script>
+    <!-- 食物菜单（第二批）。同样必须在 sprite.js 之前。 -->
+    <script src="./foods.js"></script>
+    <!-- 好感度（第三批）+ 离线演化（第三批）。离线依赖 affinity，故排在它之后。 -->
+    <script src="./affinity.js"></script>
+    <script src="./offline.js"></script>
     <script src="./sprite.js"></script>
     <script src="./events.js"></script>
     <script src="./renderer.js"></script>

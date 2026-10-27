@@ -346,13 +346,38 @@ class PetSprite {
     this._vitalsRestored = false;
     this._vitalsSaveAt = 0;
     this._vitalsLastTick = 0;
+    this._vitalsLastTick = 0;
+
+    // ---- 好感度（第三批）----
+    // 长期关系值，与 mood 不同：不 decay 回归，只在长期缺席时下降。
+    // 每日互动有上限（见 affinity.js DAILY_RULES），防止连点刷满。
+    const affinityCfg = pet.affinity || config.affinity;
+    this.affinity = (typeof window !== 'undefined' && window.PET_AFFINITY)
+      ? new window.PET_AFFINITY.AffinityState(affinityCfg)
+      : null;
+    this._affinityRestored = false;
+
+    // ---- 离线演化（第三批）----
+    // 启动时读快照 → 算离线时长 → 一次性推演 → 播回归剧情。
+    // 注意：推演必须在 vitalsRestore 之前完成，否则会先用旧值再推演导致双重计算。
+    this._offlinePending = true;
+    this._offlineResult = null;
+
 
     // 启动时从 data/memory.json 恢复上次的心情值（P1-4）。
     // 不 await —— 恢复是异步的，不该阻塞宠物首次渲染；
     // 失败（首次运行/文件损坏）静默保持基准值 50。
     this.moodRestore();
-    // 精力/饱食快照恢复（同样不 await，不阻塞首帧）
-    this.vitalsRestore();
+    // 恢复顺序**必须串行**（不能各自独立发起，否则有竞态）：
+    //   vitalsRestore            读存档，把 energy/hunger 恢复到"离线前的值"
+    //   affinityRestoreWithOffline 再基于这个值做离线推演
+    // 若两者并发，推演结果可能被 vitalsRestore 写入的旧值覆盖 —— 表现为"离线推演没生效"。
+    (async () => {
+      try { await this.vitalsRestore(); } catch {}
+      try { await this.affinityRestoreWithOffline(); } catch {}
+    })();
+    // 每日首次打开 = 她来打招呼（firstMeet +2，每天 1 次）
+    setTimeout(() => { try { this.AFFINITY_Interact('firstMeet'); } catch {} }, 4000);
     // 交互/移动
     this.dragState = { active: false, dragging: false, sx: 0, sy: 0, petX: 0, petY: 0 };
     this.justDragged = false;
@@ -801,43 +826,114 @@ class PetSprite {
     this.switchTo(clip, true);
   }
 
-  PET_FEED() {
+  /**
+   * 投喂（P2 第二批：支持食物菜单）。
+   *
+   * @param {string} [foodId] 食物 id（foods.js 的表里找）。不传 = 默认「小鱼干」，
+   *                          与旧行为完全兼容。
+   *
+   * 与旧版的差异：
+   *   - 食物恢复量/动画/台词/冷却都从食物表读，不再写死
+   *   - 每条食物独立冷却（不同食物互不影响）
+   *   - 动画名不存在时**跳过动画但仍生效**（配置写了不存在的素材不该让投喂失效）
+   */
+  PET_FEED(foodId) {
     const now = Date.now();
-    if (now - petFeedLastAt < PET_FEED_COOLDOWN_MS) {
-      // 冷却期间给用户可见反馈（对齐上游「吃饱啦」气泡），而不是静默无反应。
-      this.showMenuNotice('吃饱啦，等会儿再喂～');
+    const foods = (typeof window !== 'undefined' && window.PET_FOODS)
+      ? window.PET_FOODS : null;
+    const food = foods ? foods.findFood(foodId || 'fish', foods.sanitizeFoods(
+      (this.vitals && this.vitals.cfg && this.vitals.cfg.foods) || undefined)) : null;
+
+    // 没有 foods 模块（被裁剪的构建）：退回旧的写死行为
+    if (!food) {
+      if (now - petFeedLastAt < PET_FEED_COOLDOWN_MS) {
+        this.showMenuNotice('吃饱啦，等会儿再喂～');
+        return;
+      }
+      petFeedLastAt = now;
+      this.PET_SLEEP_Wake();
+      this.stopMove();
+      this.stopThrow && this.stopThrow();
+      this.PET_FEED_Clip = PET_FEED_ANIM;
+      this.anim = PET_FEED_ANIM;
+      this.once = true;
+      this.switchTo(PET_FEED_ANIM, true);
+      this.lastInteractionAt = now;
+      const m = this.mood.event('feed');
+      this.VITALS_Feed(15);
+      this.renderMood();
+      if (m) this.moodSaveThrottled();
+      this.PET_FEED_Say(PET_FEED_LINES[Math.floor(Math.random() * PET_FEED_LINES.length)]);
       return;
     }
+
+    // 这套食物是否在冷却中
+    if (!this._foodCooldowns) this._foodCooldowns = new foods.FoodCooldowns();
+    const remain = this._foodCooldowns.remaining(food.id, now);
+    if (remain > 0) {
+      this.showMenuNotice('「' + food.name + '」还吃不下了，' + Math.ceil(remain / 1000) + ' 秒后再试～');
+      return;
+    }
+
+    // 饱食太满：拒绝（文档 §3.2「吃饱摆手拒绝」）。放在动画之前 —— 拒绝了就不该播吃的动画。
+    const feedRes = this.VITALS_Feed(food.hunger);
+    if (feedRes.refused) {
+      // VITALS_Feed 内部已经 showMenuNotice('吃饱啦…')，这里不重复提示
+      return;
+    }
+
+    this._foodCooldowns.mark(food.id, now, food.cooldownMs);
     petFeedLastAt = now;
-    // 睡着时投喂 = 用户主动操作：先唤醒，喂完回到随机链（而不是在睡眠标记里播投喂动画）。
+
+    // 睡着时投喂 = 用户主动操作：先唤醒
     this.PET_SLEEP_Wake();
     this.stopMove();
     this.stopThrow && this.stopThrow();
-    // 设锁：投喂动画播完前，气泡/碎碎念等不许抢前台（否则台词气泡一出现，
-    // showWhisper 就 playOnce 把「吃小鱼干」顶掉 —— "投喂被气泡打断"的根源）。
-    this.PET_FEED_Clip = PET_FEED_ANIM;
-    this.anim = PET_FEED_ANIM;
-    this.once = true;
-    this.switchTo(PET_FEED_ANIM, true);
-    // 投喂接入心情（原来台词说"心情 +1"但代码里根本没调 mood.event，
-    // 用户投喂后心情条毫无变化——这是最直观的逻辑断裂）。
-    // 放在 switchTo 之后：先让动画播起来，再更新心情，避免档位切换的 cue 抢掉投喂动画。
-    this.lastInteractionAt = now;
-    const feedMood = this.mood.event('feed');
-    // 喂食恢复饱食（小鱼干 +15，与文档食物表一致）。vitals 关闭时是空操作。
-    this.VITALS_Feed(15);
-    if (feedMood) {
-      // 只更新徽标，不播 cue（投喂动画本身已经是反馈，再插一段引导动画会打断它）
-      this.renderMood();
-      this.moodSaveThrottled();
-    } else {
-      this.renderMood();
+
+    // 动画：素材不存在就跳过（配置写了不存在的名字不该让投喂失效）
+    const anim = this.hasAnim(food.anim) ? food.anim : PET_FEED_ANIM;
+    if (this.hasAnim(anim)) {
+      this.PET_FEED_Clip = anim;
+      this.anim = anim;
+      this.once = true;
+      this.switchTo(anim, true);
     }
-    const line = PET_FEED_LINES[Math.floor(Math.random() * PET_FEED_LINES.length)];
-    // 台词走宿主的 /broadcast（它内部 decideBroadcast 后 writePet("say")），
-    // 因此和碎碎念/对话共用同一个气泡槽、同一套优先级与自动消失计时。
-    // 前端没有现成 bridge 方法（petBridge 只有 setBounds/setInteractive/openLocalFile
-    // 等），所以和同文件的其它宿主调用一样直接 fetch 本机地址。
+
+    this.lastInteractionAt = now;
+
+    // 心情：食物自己的 mood 偏移（默认 8），走事件表外的直加不了 ——
+    // 用 'feed' 事件（+8）保持一致心智，食物若配了不同 mood 则额外补差。
+    const feedMood = this.mood.event('feed');
+    const extraMood = (Number(food.mood) || 8) - 8;
+    if (extraMood !== 0 && this.mood && this.mood.enabled) {
+      // 通过临时事件名补差（避免给 MOOD_EVENTS 加无意义条目）
+      const cur = this.mood.value0;
+      this.mood.restore(Math.max(0, Math.min(100, cur + extraMood)));
+    }
+    this.renderMood();
+    if (feedMood) this.moodSaveThrottled();
+
+    // 精力影响（奶茶/冰淇淋 -5 之类）
+    if (Number(food.energy) && this.vitals && this.vitals.enabled) {
+      const cur = this.vitals.energy;
+      this.vitals.restore(cur + Number(food.energy), this.vitals.hunger);
+      if (Number(food.energy) < 0) {
+        this.showMenuNotice('（喝完有点困…）');
+      }
+    }
+
+    // 投喂 = 好感度 +1（每天前 3 次）
+    this.AFFINITY_Interact('feed');
+
+    // 台词
+    const lines = (food.lines && food.lines.length) ? food.lines : PET_FEED_LINES;
+    this.PET_FEED_Say(lines[Math.floor(Math.random() * lines.length)]);
+
+    this.VITALS_SaveThrottled(true);
+  }
+
+  /** 投喂台词走宿主 broadcast（与碎碎念共用同一气泡槽与优先级） */
+  PET_FEED_Say(line) {
     try {
       fetch(BASE + "/broadcast?pet=" + encodeURIComponent(this.pet.id), {
         method: "POST",
@@ -1061,15 +1157,77 @@ class PetSprite {
     this.playOnce(name);
   }
 
-  // ---- 精力 / 饱食（P2 第一批）--------------------------------------------
+  // ---- 好感度 + 离线演化（P2 第三批）--------------------------------------
   //
-  // 三个入口：
-  //   vitalsRestore()      启动时从 pet-state-<id>.json 恢复
-  //   VITALS_Tick()        每拍推进（复用既有定时器，不额外起定时器）
-  //   VITALS_Feed(amount)  喂食
+  // 好感度是长期关系（天~周），与 mood（分钟级情绪）互补：
+  //   mood      频繁波动、会 decay 回归
+  //   affinity  缓慢累积、只随长期缺席下降、决定解锁内容
   //
-  // 与 mood 的关系：mood 是分钟级情绪（事件驱动、快速回归）；这两个是按小时演化的
-  // "身体状态"。enabled=false 时 VitalsState 全透传，不消耗任何东西。
+  // 离线演化是"关闭期间状态继续走"的实现：启动时读快照算离线时长，
+  // 一次性推演（不是跑 N 次 tick），再播对应回归剧情。
+
+  /**
+   * 启动时恢复好感度 + 推演离线变化。
+   * 必须在 vitalsRestore **之后**调用（要先有真实的 energy/hunger 才谈得上离线衰减）。
+   *
+   * 顺序：
+   *   1. 读 pet-state 快照（vitalsRestore 已经读过一次，这里复用它存下的 raw）
+   *   2. simulateOffline 推演
+   *   3. 应用结果 + 播回归剧情
+   */
+  /** 诊断落盘（渲染进程 console 不进文件，只能经主进程落 pet.log） */
+  DIAG(msg) {
+    try {
+      const b = window.petBridge;
+      if (b && typeof b.diag === 'function') b.diag(String(msg));
+    } catch {}
+  }
+  /**
+   * 启动时恢复好感度 + 推演离线变化。
+   * 必须在 vitalsRestore **之后**调用（要先有真实的 energy/hunger 才谈得上离线衰减）。
+   */
+  async affinityRestoreWithOffline() {
+    if (this._affinityRestored) return;
+    this._affinityRestored = true;
+    if (!this.affinity || !this.affinity.enabled) return;
+
+    const bridge = window.petBridge;
+    if (!bridge || typeof bridge.loadState !== 'function') return;
+
+    try {
+      const r = await bridge.loadState(this.pet.id);
+      if (!r || !r.ok || !r.state) return;
+      const snap = r.state;
+
+      // 先恢复好感度（用存档里的值）
+      this.affinity.restore(snap.affinity, snap.lastSeen, snap.counters);
+
+      // 再推演离线（用存档时间戳算离线多久）
+      const O = (typeof window !== 'undefined' && window.PET_OFFLINE) ? window.PET_OFFLINE : null;
+      if (!O) return;
+      const cfg = { vitals: this.vitals && this.vitals.cfg, affinity: this.affinity.cfg };
+      const sim = O.simulateOffline(snap, new Date(), cfg);
+      this._offlineResult = sim;
+
+      if (!sim.changed) return;   // 没离线（或时间戳非法）→ 什么都不做
+
+      // 应用推演结果
+      if (this.vitals && this.vitals.enabled) {
+        this.vitals.restore(sim.energy, sim.hunger);
+      }
+      if (this.mood && this.mood.enabled) this.mood.restore(sim.mood);
+      this.affinity.restore(sim.affinity, this.affinity.lastSeen, snap.counters);
+
+      console.log('[dsh-pet] 离线 ' + sim.offlineHours.toFixed(1) + ' 小时 → 回归剧情「' +
+        sim.reunion + '」 energy=' + sim.energy.toFixed(0) +
+        ' hunger=' + sim.hunger.toFixed(0) + ' affinity=' + sim.affinity.toFixed(1));
+
+      this.renderMood();
+      this.OFFLINE_PlayReunion(sim);
+    } catch (e) {
+      console.warn('[dsh-pet] 离线推演失败（忽略，按当前值继续）: ' + (e && e.message));
+    }
+  }
 
   /** 从 pet-state-<id>.json 恢复精力/饱食（启动时调一次，失败静默走默认值） */
   async vitalsRestore() {
@@ -1089,6 +1247,93 @@ class PetSprite {
       this._vitalsLastTick = Date.now();
     } catch { /* 首次运行没有存档，正常 */ }
   }
+
+  /**
+   * 播放回归剧情：动画 + 台词。
+   * 只播一次（启动时），之后正常进随机链。
+   */
+  OFFLINE_PlayReunion(sim) {
+    const rd = sim.reunionData;
+    if (!rd) return;
+    // 动画：素材不存在就跳过（回归剧情不该因为缺素材而静默）
+    if (rd.anim && this.hasAnim(rd.anim)) {
+      // 延后一点：preload/资源预热需要时间，立刻播可能闪
+      setTimeout(() => {
+        try {
+          if (this.PET_SLEEP_On) this.PET_SLEEP_Wake();
+          this.playOnce(rd.anim);
+        } catch { /* 播放失败不影响主体 */ }
+      }, 1200);
+    }
+    // 台词
+    if (Array.isArray(rd.lines) && rd.lines.length) {
+      const line = rd.lines[Math.floor(Math.random() * rd.lines.length)];
+      setTimeout(() => {
+        try {
+          fetch(BASE + '/broadcast?pet=' + encodeURIComponent(this.pet.id), {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ text: line }),
+          }).catch(() => {});
+        } catch { /* 静默 */ }
+      }, 2200);
+    }
+  }
+
+  /**
+   * 记一次好感互动（带每日上限）。
+   * @param {string} rule affinity.DAILY_RULES 里的键：
+   *                      firstMeet / feed / play / milestone / accompany / care
+   * @returns {{applied:number, levelUp:boolean, capped:boolean}}
+   */
+  AFFINITY_Interact(rule) {
+    if (!this.affinity || !this.affinity.enabled) return { applied: 0, levelUp: false, capped: false };
+    const r = this.affinity.interact(rule, new Date());
+    if (r.levelUp) {
+      // 升级反馈：气泡 + 心情小奖励
+      const lv = this.affinity.level;
+      this.showMenuNotice('好感度提升 → Lv.' + lv.lv + '「' + lv.name + '」');
+      if (this.mood && this.mood.enabled) {
+        this.mood.event('workSlack');   // 用已有的正向小事件（不新增事件名）
+        this.renderMood();
+      }
+      console.info('[dsh-pet] 好感度升级 Lv.' + lv.lv + ' ' + lv.name);
+    }
+    if (r.applied !== 0) this.VITALS_SaveThrottled();
+    return r;
+  }
+
+  /** 好感度加成的正收益系数（1.0~1.5），供 mood 事件放大用 */
+  AFFINITY_Bonus() {
+    if (!this.affinity || !this.affinity.enabled) return 1;
+    return this.affinity.positiveBonus();
+  }
+
+  /** 状态面板/徽标用的汇总（第三批先提供数据，UI 第四批做） */
+  AFFINITY_Summary() {
+    if (!this.affinity || !this.affinity.enabled) return null;
+    const lv = this.affinity.level;
+    return {
+      value: Math.round(this.affinity.value * 10) / 10,
+      lv: lv.lv,
+      name: lv.name,
+      desc: lv.desc,
+      toNext: this.affinity.toNext,
+      bonus: this.affinity.positiveBonus(),
+    };
+  }
+
+  // ---- 精力 / 饱食（P2 第一批）--------------------------------------------
+  //
+  // 三个入口：
+  //   vitalsRestore()      启动时从 pet-state-<id>.json 恢复
+  //   VITALS_Tick()        每拍推进（复用既有定时器，不额外起定时器）
+  //   VITALS_Feed(amount)  喂食
+  //
+  // 与 mood 的关系：mood 是分钟级情绪（事件驱动、快速回归）；这两个是按小时演化的
+  // "身体状态"。enabled=false 时 VitalsState 全透传，不消耗任何东西。
+
+  /** 从 pet-state-<id>.json 恢复精力/饱食（启动时调一次，失败静默走默认值） */
 
   /** 每拍推进（由既有定时器调用） */
   VITALS_Tick() {
@@ -1172,7 +1417,9 @@ class PetSprite {
       mood: this.mood ? Math.round(this.mood.value0 * 10) / 10 : 50,
       energy: s.energy,
       hunger: s.hunger,
-      affinity: 10, // 好感度（下一批实现，先占位）
+      affinity: (this.affinity && this.affinity.enabled)
+        ? Math.round(this.affinity.value * 10) / 10 : 10,
+      affinityLastSeen: (this.affinity && this.affinity.enabled) ? this.affinity.lastSeen : undefined,
       lastSeen: (typeof window.PET_STATE_DATE_KEY === 'function')
         ? window.PET_STATE_DATE_KEY(new Date())
         : new Date().toISOString().slice(0, 10),
@@ -2267,6 +2514,8 @@ class PetSprite {
     // 心情：点击 = 逗它（最频繁的开心来源）。跨档时才播引导动画，
     // 连续点也不会每下都打断当前动作刷存在感（与浏览器 pet.ts 同一语义）。
     this.lastInteractionAt = Date.now();
+    // 点击 = 陪玩，好感度 +0.5（每天前 10 次，见 affinity.DAILY_RULES）
+    this.AFFINITY_Interact('play');
     const clickMood = this.mood.event('click');
     if (clickMood) this.moodCue(clickMood);
     this.renderMood();

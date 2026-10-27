@@ -107,6 +107,10 @@ contextBridge.exposeInMainWorld('petBridge', {
   saveState(petId, state) {
     return ipcRenderer.invoke('pet:save-state', { petId, state });
   },
+  /** 诊断：把消息写进 pet.log（渲染进程 console 不进文件，排查用） */
+  diag(msg) {
+    ipcRenderer.send('pet:diag', msg);
+  },
   // 退出桌宠：关掉宿主(node)与宠物窗口，主进程随后自行退出。
   quitPet() {
     ipcRenderer.send('pet:quit');
