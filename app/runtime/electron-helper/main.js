@@ -1077,7 +1077,10 @@ app.whenReady().then(() => {
       try {
         const first = windows.values().next().value;
         if (first && !first.isDestroyed()) {
-          const dump = await first.webContents.executeJavaScript(`(async () => ({
+          // 渲染端先 JSON.stringify 再回传：executeJavaScript 的返回值走结构化克隆，
+          // 直接回传对象时只要里面混进任何不可克隆值（DOM 节点/函数/循环引用）就整体抛
+          // `An object could not be cloned.`，冒烟自检会连一张图都拿不到。回传字符串最稳。
+          const dumpJson = await first.webContents.executeJavaScript(`(async () => JSON.stringify({
             hasBridge: typeof window.petBridge !== 'undefined',
             hasSetInteractive: typeof window.petBridge?.setInteractive === 'function',
             viewport: window.innerWidth + 'x' + window.innerHeight,
@@ -1245,7 +1248,104 @@ app.whenReady().then(() => {
               }
               return out;
             })(),
+            // 点击自检：真点一个「动作」三级面板里的具体动画叶子，确认它真的产生了播放。
+            // 只做 hover 的 menuSmoke 抓不到「叶子分发抛错/点了没反应」（0ceff62 就是这类回归）。
+            menuClickSmoke: await (async function () {
+              var dbg = window.__dshPetDebug;
+              var hit = document.querySelector('.pet-hit');
+              if (!hit || !dbg) return null;
+              // 关掉可能还开着的菜单，重新走一次真实用户路径
+              document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+              await new Promise(function (r) {
+                setTimeout(r, 80);
+              });
+              var errsBefore = (dbg.errors || []).length;
+              var out = { threw: null, leaf: '', menuAction: null, playedAnim: '', errsNew: 0 };
+              try {
+                hit.dispatchEvent(
+                  new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: 400, clientY: 260, screenX: 400, screenY: 260 }),
+                );
+                var menu = document.querySelector('.dsh-pet-menu');
+                if (!menu) {
+                  out.threw = 'menu not mounted';
+                  return out;
+                }
+                var cols = function () {
+                  return Array.prototype.slice.call(menu.querySelectorAll('.dsh-pet-menu-column')).filter(function (p) {
+                    return p.style.display !== 'none';
+                  });
+                };
+                var itemsOf = function (panel) {
+                  return Array.prototype.slice.call(panel.querySelectorAll(':scope > .dsh-pet-menu-item'));
+                };
+                var isBranch = function (item) {
+                  return item.classList.contains('dsh-pet-menu-branch');
+                };
+                // 一级：悬停「动作」
+                var rootItems = itemsOf(cols()[0]);
+                var actItem = rootItems.filter(function (i) {
+                  return i.textContent.indexOf('动作') === 0;
+                })[0];
+                if (!actItem) {
+                  out.threw = 'no 动作 branch';
+                  return out;
+                }
+                actItem.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false, relatedTarget: menu }));
+                await new Promise(function (r) {
+                  setTimeout(r, 60);
+                });
+                // 二级：悬停第一个分类（例：待机）
+                var lvl2 = cols()[cols().length - 1];
+                var cat = itemsOf(lvl2).filter(isBranch)[0];
+                if (!cat) {
+                  out.threw = 'no category branch';
+                  return out;
+                }
+                cat.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false, relatedTarget: lvl2 }));
+                await new Promise(function (r) {
+                  setTimeout(r, 60);
+                });
+                // 三级：点第一个具体动画叶子
+                var lvl3 = cols()[cols().length - 1];
+                var leaves = itemsOf(lvl3).filter(function (i) {
+                  return !isBranch(i);
+                });
+                if (!leaves.length) {
+                  out.threw = 'no animation leaf';
+                  return out;
+                }
+                // 播放证据必须看「前沿 video」而不是「任意一个 video」：两个 video 做双缓冲，
+                // 点之前背面那个可能正好就是待点的动画名，用 some() 判会假阳。
+                var frontOf = function () {
+                  return document.querySelector('.pet-sprite video.is-front');
+                };
+                var frontBefore = frontOf();
+                out.frontBefore = frontBefore ? frontBefore.src : '';
+                // 优先点一个「当前不是正在播的」叶子，避免点回同一个动画掩盖没反应
+                var pick = leaves.filter(function (i) {
+                  return !frontBefore || frontBefore.src.indexOf(encodeURIComponent(i.textContent.trim())) === -1;
+                })[0] || leaves[0];
+                var leafName = pick.textContent.trim();
+                out.leaf = leafName;
+                out.menuMountedBeforeClick = true;
+                dbg.menuAction = null;
+                pick.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                await new Promise(function (r) {
+                  setTimeout(r, 400);
+                });
+                out.menuAction = dbg.menuAction;
+                out.menuClosedAfterClick = !document.querySelector('.dsh-pet-menu');
+                var frontAfter = frontOf();
+                out.frontAfter = frontAfter ? frontAfter.src : '';
+                out.playedAnim = frontAfter && frontAfter.src.indexOf(encodeURIComponent(leafName)) !== -1 ? leafName : '';
+                out.errsNew = (dbg.errors || []).length - errsBefore;
+              } catch (err) {
+                out.threw = String(err);
+              }
+              return out;
+            })(),
           }))()`);
+          const dump = JSON.parse(dumpJson);
           console.log(
             '[dsh-pet-desktop-helper] smoke dump: windows=' +
               windows.size +

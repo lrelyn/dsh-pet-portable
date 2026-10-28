@@ -3074,6 +3074,9 @@ class PetSprite {
   onMenuAction(leaf) {
     this.closeMenu();
     if (!leaf || typeof leaf !== 'object') return;
+    // 记录本次叶子（冒烟自检读它）：能区分「点到了但分发抛错」和「根本没点到」。
+    const dbg = window.__dshPetDebug;
+    if (dbg) dbg.menuAction = { label: String(leaf.label || ''), action: typeof leaf.action === 'string' ? leaf.action : null, anim: typeof leaf.anim === 'string' ? leaf.anim : null, at: Date.now() };
     if (leaf.action === 'open-help') {
       // 使用说明（含赞助码）——网页版：使用说明.html + 赞助码.jpg + logo.png 同放在
       // 桌宠文件夹根目录。路径由**主进程**拼（它知道包根，渲染端不知道），
@@ -3139,7 +3142,11 @@ class PetSprite {
     }
     // 投喂: 播吃小鱼干, 随后冒一句台词（走 host, 气泡槽与碎碎念共用）
     // 投喂：'feed'（旧菜单/无参数）与 'feed:<foodId>'（子菜单）都命中
-    if (leaf.action === 'feed' || leaf.action.startsWith('feed:')) {
+    // typeof 守卫是必须的：动作菜单的叶子由 shared-core.js:797 的 leaf() 生成，只有
+    // { label, anim }，没有 action。缺守卫时 startsWith 抛 TypeError，onMenuAction
+    // 在这行中断，下面所有纯动画分发（3163 起的 leaf.anim 分支）全都执行不到 ——
+    // 表现就是「动作菜单点任何具体动画都没反应」（0ceff62 引入的回归）。
+    if (leaf.action === 'feed' || (typeof leaf.action === 'string' && leaf.action.startsWith('feed:'))) {
       const foodId = leaf.action === 'feed' ? undefined : leaf.action.slice(5);
       this.PET_FEED(foodId);
       this._feedCount = (this._feedCount || 0) + 1;

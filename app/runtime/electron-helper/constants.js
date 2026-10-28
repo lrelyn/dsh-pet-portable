@@ -150,6 +150,8 @@ window.__dshPetDebug = {
   lastBalanceOk: null,
   menuOpen: false,
   chatOpen: false,
+  // 最近一次点击菜单叶子（冒烟自检用：能区分「叶子到了 onMenuAction」和「点了没反应」）
+  menuAction: null,
   bootAt: Date.now(),
 };
 window.addEventListener('error', (event) => {
