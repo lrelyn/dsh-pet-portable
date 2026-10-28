@@ -31,6 +31,17 @@ function findTests(dir) {
 const all = findTests(path.join(APP, 'src')).sort();
 console.log(`=== 逐个实跑 ${all.length} 个测试文件 ===\n`);
 
+// node --test 的计数行有两种格式：
+//   旧 / TAP :  # pass 12   # fail 0   # cancelled 0
+//   新 / spec:  ℹ pass 12   ℹ fail 0   ℹ cancelled 0   ← 本机 node v24 用的是这种
+// 之前这里只匹配 "# pass"，于是 v24 上永远读成 0 项。实测：注入一个
+// assert.strictEqual(1,2) 的必失败用例，脚本照样输出「OK 0 项 / 结论：全部测试文件可跑且全绿」
+// ——门禁对断言失败完全失明。现在两种格式都认；一次都没匹配到也判为问题。
+function counter(out, name) {
+  const m = out.match(new RegExp(String.raw`(?:#|ℹ)\s*` + name + String.raw`\s+(\d+)`));
+  return m ? Number(m[1]) : null;
+}
+
 let okFiles = 0, badFiles = 0, totalPass = 0, totalFail = 0;
 const problems = [];
 
@@ -44,22 +55,34 @@ for (const f of all) {
     out = String(e.stdout || '') + String(e.stderr || '');
     code = e.status === undefined ? 1 : e.status;
   }
-  const p = Number((out.match(/# pass (\d+)/) || [])[1] || 0);
-  const fl = Number((out.match(/# fail (\d+)/) || [])[1] || 0);
-  const cx = Number((out.match(/# cancelled (\d+)/) || [])[1] || 0);
-  totalPass += p; totalFail += fl;
+  const p = counter(out, 'pass');
+  const fl = counter(out, 'fail');
+  const cx = counter(out, 'cancelled') || 0;
+  // 读不到计数行 = 测试根本没跑起来（进程崩溃、参数被拒等），同样是问题。
+  const ran = p !== null && fl !== null;
+  totalPass += p || 0; totalFail += fl || 0;
   // 注意：node --test 只要有任何 cancelled 子测试就 exit 1，
   // 但 cancelled ≠ 失败（是用计时器的子测试在事件循环结束后被取消）。
-  // 判定成败只看 # fail 计数，不看退出码。
-  if (fl === 0) {
+  // 判定成败只看 fail 计数，不看退出码。
+  if (ran && fl === 0) {
     okFiles++;
     const tail = cx ? `  (${cx} 个延迟子测试被取消，非失败)` : '';
     console.log(`  OK    ${String(p).padStart(3)} 项  ${f}${tail}`);
   } else {
     badFiles++;
     const miss = (out.match(/Cannot find (?:package|module) '([^']+)'/) || [])[1];
-    const why = miss ? '缺包 ' + miss : (out.match(/Error: ([^\n]+)/) || [])[1] || '见完整输出';
-    console.log(`  FAIL  ${String(p).padStart(3)} 项  ${f}   ← ${why}`);
+    // 断言失败的原文长这样：'AssertionError [ERR_ASSERTION]: Expected values to be...'
+    // 旧正则只找 'Error: '，匹配不到，于是永远只会打出「见完整输出」。
+    // 第一优先取失败的用例名，其次取 AssertionError 的消息正文。
+    // 这里不能用 /g —— 带 /g 时 match() 返回的是所有完整匹配，m[1] 会取成第二个匹配。
+    const assertion = (out.match(/\u2716\s+([^(\n]+?)\s+\(\d/) || [])[1]
+      || (out.match(/[A-Za-z]*Error(?:\s*\[[^\]]+\])?:\s*([^\n]+)/) || [])[1];
+    const why = !ran
+      ? '没有 node --test 计数行（进程未正常跑完）'
+      : miss ? '缺包 ' + miss
+      : assertion ? assertion.trim()
+      : (out.match(/Error: ([^\n]+)/) || [])[1] || '见完整输出';
+    console.log(`  FAIL  ${String(p || 0).padStart(3)} 通过 / ${String(fl || 0).padStart(2)} 失败  ${f}   ← ${why}`);
     problems.push({ file: f, why, out });
   }
 }
