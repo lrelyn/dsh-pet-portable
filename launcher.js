@@ -57,7 +57,6 @@ const ENTRY = path.join(base, 'app', 'lib', 'standalone.js');
 const ELECTRON = path.join(base, 'electron', 'electron.exe');
 const HOME = path.join(base, 'data');
 const HOST_SRC = path.join(base, 'app', 'lib', 'standalone.js');
-const HOST_PRISTINE = path.join(base, 'app', 'lib', 'standalone.js.pristine');
 const LOG = path.join(base, 'pet.log');
 
 const PORT = 3080;
@@ -181,6 +180,13 @@ if (running) die('already running - no second copy was started. (' + running + '
 // --- sandbox patch ---------------------------------------------------------
 // Idempotent and reversible. Refuses to act if the host code no longer matches,
 // so an upgrade can never be silently corrupted.
+//
+// Reversal is the exact inverse of the patch, not a copy of a stored original.
+// An earlier version wrote standalone.js.pristine on first use and restored it
+// afterwards; that snapshot froze the host at whatever build first needed the
+// fallback, so any later rebuild was silently rolled back by it (the 2026-10-07
+// snapshot was 298 lines behind the current build). A one-token insertion needs
+// no backup to undo.
 const PATCH_MARK = '__noSandboxFallback';
 const ANCHOR = '\t\targs: [helperPath]';
 const PATCHED = '\t\targs: ["--no-sandbox", helperPath] // ' + PATCH_MARK;
@@ -196,16 +202,17 @@ function setNoSandbox(on) {
       say('if no window appears, that is why.');
       return false;
     }
-    if (!fs.existsSync(HOST_PRISTINE)) fs.writeFileSync(HOST_PRISTINE, src);
     fs.writeFileSync(HOST_SRC, src.replace(ANCHOR, PATCHED));
     return true;
   }
 
-  // Turning it off: restore the pristine copy if we have one, else strip the flag.
+  // Turning it off: remove the marker line we added. PATCHED is a single fixed
+  // string, so this restores the file byte-for-byte whatever build it came from.
   if (!src.includes(PATCH_MARK)) return true;
-  if (fs.existsSync(HOST_PRISTINE)) {
-    fs.copyFileSync(HOST_PRISTINE, HOST_SRC);
-    return true;
+  if (!src.includes(PATCHED)) {
+    say('standalone.js carries the --no-sandbox marker but not the line this launcher writes.');
+    say('leaving it alone rather than guessing; a reinstall of the package fixes it.');
+    return false;
   }
   fs.writeFileSync(HOST_SRC, src.replace(PATCHED, ANCHOR));
   return true;

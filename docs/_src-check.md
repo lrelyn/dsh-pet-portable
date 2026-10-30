@@ -1,6 +1,13 @@
 大肥鱼桌宠 功能合格性检查与修改方案
 P2 四大功能（精力/饱食 · 好感度 · 离线演化 · 多宠互动）实测核查 ｜ 含逐项修改方案与代码
 2026年10月27日
+
+> **历史文档 · 已归档，不要照抄其中的代码**
+> 本文是 2026-10-27 的一次体检快照，行号与片段都不再与当前代码对应。
+> 其中的修改方案多数已经落地，少数被后续提交取代。
+> **特别注意 3.3 改动二的片段是错的**：它原样缺少 `typeof` 守卫，直接照抄会重新引入「动作菜单点任何动画都没反应」的回归（详见该处警告）。
+> 以当前源码为准：`app/runtime/electron-helper/sprite.js` 的 `onMenuAction` 分发段。
+
 # 一、总体结论
 经对运行进程、HTTP 配置接口、存档文件与 runtime 源码的逐项核查，确认：
 - P2 四大功能在 runtime 层已真实实现并正在运行（非空壳、非仅方案），四维状态在持续变化。
@@ -41,6 +48,16 @@ foods.js 定义了 7 种食物（小鱼干、零食、白饭、盒饭、Token、
   })(),
 },
 改动二：action 分发（sprite.js 第 2996–3000 行）。让 feed 与 feed:xxx 都能命中，并解析出 foodId 传给 PET_FEED。
+
+> ⚠️ **本节的「改为」片段是错的，已被提交 2ddddbe 修正。不要照抄。**
+> 本节「改为」片段里 `leaf.action.startsWith(...)` 这种写法缺少 `typeof` 守卫。动作菜单的叶子由
+> `shared-core.js` 的 `leaf()` 生成，只有 `{ label, anim }`、**没有 action 字段**；
+> 于是 `undefined.startsWith` 抛 TypeError，`onMenuAction` 在这一行中断，
+> 其后的纯动画分发全都执行不到 —— 表现就是「右键 → 动作 → 点任何动画都没反应」。
+> 正确的当前代码在 `app/runtime/electron-helper/sprite.js:3149`：
+> `if (leaf.action === 'feed' || (typeof leaf.action === 'string' && leaf.action.startsWith('feed:'))) {`
+> 回归测试见 `tests/menu-dispatch.js`。
+
 // 原代码（第 2996–3000 行）：
 if (leaf.action === 'feed') {
   this.PET_FEED();
