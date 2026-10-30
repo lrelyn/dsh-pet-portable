@@ -12,6 +12,10 @@
 // 动画循环语义：进行中档位循环播（switchTo once=false），终态档位播一遍回 idle 链；
 //   回空闲时把正在循环的那段改成"播完即停"（见下面空闲分支），否则 ended 永不触发、链回不去。
 PetSprite.prototype.onWorkTick = function onWorkTick(snapshot, tick) {
+  // 睡着 / 正在醒来：不播任何工作动画（也不弹工作气泡）。醒来后检测器 5 秒内会
+  // 重新推一次状态，workState 不会丢。早先这里没有守卫 —— 本地检测器每 5 秒一次
+  // 的 playOnce 会把正在播的醒来动画直接顶掉。
+  if (this.PET_SLEEP_On) return;
   if (!this.pet.workStatusEnabled) return; // 未启用工作状态联动 -> 该宠物完全免疫（与浏览器一致）
   if (tick === 0 || tick === this.prevWorkTick) return;
   this.prevWorkTick = tick;
@@ -187,6 +191,9 @@ PetSprite.prototype.showWhisper = function showWhisper(text, image) {
 
 // 余额展示（档位动画 + 气泡）：周期轮询与菜单点播共用同一展示路径，视觉/行为严格一致
 PetSprite.prototype.showBalanceNow = function showBalanceNow(state) {
+  // 睡着 / 正在醒来：不播余额档位动画（醒来后会按新档位重放）。
+  // 早先无守卫 —— 余额刷新正好落在醒来动画期间就会把它顶掉。
+  if (this.PET_SLEEP_On) return;
   if (!state || !state.ok) return;
   const p = S.balancePercent(state);
   if (p === undefined) return; // 当前数据源没有百分比语义：不触发档位动画

@@ -52,6 +52,16 @@ const PET_SLEEP_OPTIONS = [
 const PET_SLEEP_BASE_SECONDS = 600;
 
 /**
+ * 醒来动画的最长等待时间（毫秒）。
+ *
+ * 醒来靠 <video> 的 onended 接力，而 switchTo() 一开头就会把旧 <video> 的
+ * onended 置空 —— 任何在醒来期间切走的动画都会让那个回调永不触发，于是
+ * PET_SLEEP_Waking / PET_SLEEP_On 双双卡在 true：宠物定格在醒来那一帧，
+ * 之后点它没反应、也不会再自己动。这个上限是最后一道保险，超时强制脱离。
+ */
+const PET_SLEEP_WAKE_MAX_MS = 12000;
+
+/**
  * 空闲自动进入工作状态的参数。
  *
  * 为什么需要它：工作状态原本只有一个数据源 events.js 的 onWorkTick，而它读的是
@@ -254,6 +264,7 @@ class PetSprite {
     this.PET_SLEEP_WokeByClick = false; // 本次按下是否为唤醒
     this.PET_SLEEP_Waking = false;      // 正在播醒来动画（此时仍视为"在睡"）
     this.PET_SLEEP_Timer = null; // 仅为兜底用, 正常靠 onended 接力
+    this.PET_SLEEP_WakeBy = 0; // 醒来动画的截止时间戳（看门狗用，0 = 没有在醒来）
     // 两个轮询定时器的 handle 必须存下来：dispose 时要清。
     // 早先是裸 setInterval（不存 handle），sprite 销毁后它们仍活着 —— 每 5 秒对
     // 一个已卸载的实例调 PET_SLEEP_Tick / WORK_Tick。多开切换、重载配置（重建全部
@@ -642,6 +653,7 @@ class PetSprite {
       clearTimeout(this.PET_SLEEP_Timer);
       this.PET_SLEEP_Timer = null;
     }
+    this.PET_SLEEP_WakeBy = 0; // 看门狗截止时间，销毁后不该再有任何意义
     if (this.bubbleTimer !== null) window.clearTimeout(this.bubbleTimer);
     if (this.whisperTimer !== null) window.clearTimeout(this.whisperTimer);
     if (this.workTimer !== null) window.clearTimeout(this.workTimer);
@@ -894,7 +906,8 @@ class PetSprite {
         return;
       }
       petFeedLastAt = now;
-      this.PET_SLEEP_Wake();
+      // 立刻就要播吃东西的动画，所以静默脱离睡眠态（播醒来动画只会被下面顶掉）
+      this.PET_SLEEP_EndSleep();
       this.stopMove();
       this.stopThrow && this.stopThrow();
       this.PET_FEED_Clip = PET_FEED_ANIM;
@@ -928,8 +941,10 @@ class PetSprite {
     this._foodCooldowns.mark(food.id, now, food.cooldownMs);
     petFeedLastAt = now;
 
-    // 睡着时投喂 = 用户主动操作：先唤醒
-    this.PET_SLEEP_Wake();
+    // 睡着时投喂 = 用户主动操作：静默脱离睡眠态，再播吃东西的动画。
+    // 不能先 PET_SLEEP_Wake()：醒来动画会被下面的 switchTo 立刻顶掉，
+    // 留下 Waking=true 的僵尸状态，宠物之后就一直躺着不动了。
+    this.PET_SLEEP_EndSleep();
     this.stopMove();
     this.stopThrow && this.stopThrow();
 
@@ -1089,9 +1104,12 @@ class PetSprite {
       this.PET_SLEEP_Skip();
       return;
     }
-    // 唤醒动画**已在播放**时再被触发（单击 / 投喂 / 菜单）= 跳过，
-    // 直接进入随机链 —— 而不是把醒来动画从头重播一遍。
-    if (this.PET_SLEEP_Waking) { this.PET_SLEEP_Skip(); return; }
+    // 唤醒动画**已在播放**时再被触发（连点 / 右键 / 投喂 / 菜单）：直接返回。
+    // 这里曾经是 `if (Waking) { PET_SLEEP_Skip(); return; }` —— Skip 会立刻把
+    // On 置 false 并 playIdle()，把正在播的醒来动画当场掐掉。连点两下就再也
+    // 看不到醒来过程，这正是「唤醒又被挤掉了」的第一主因。幂等返回才是对的：
+    // 第一次唤醒说了算，后来的请求一律让路。
+    if (this.PET_SLEEP_Waking) return;
     if (this.PET_SLEEP_Timer) {
       clearTimeout(this.PET_SLEEP_Timer);
       this.PET_SLEEP_Timer = null;
@@ -1101,11 +1119,44 @@ class PetSprite {
     // Waking = true 期间 PET_SLEEP_On 仍为 true（见 PET_SLEEP_WasAsleep），
     // 随机链/碎碎念/工作状态都被挡住；handleEnded 里播完才清。
     this.PET_SLEEP_Waking = true;
+    this.PET_SLEEP_WakeBy = performance.now() + PET_SLEEP_WAKE_MAX_MS; // 看门狗
     this.switchTo(PET_SLEEP_WAKE, true);
     // 醒来 +3（睡饱了心情好一点）。不播 cue —— 正在播醒来动画。
     this.mood.event('wake');
     this.renderMood();
     this.moodSaveThrottled();
+  }
+
+  /**
+   * 静默脱离睡眠态：不播醒来动画，只把状态清零。
+   *
+   * 给「用户做了某件事，而这件事自己马上就要播一段动画」的调用方用
+   * （投喂 / 菜单点播 / 进入工作 / 离线回归）。这些地方早先是先调
+   * PET_SLEEP_Wake() 再立刻 switchTo 自己的动画 —— 醒来动画刚起就被顶掉，
+   * 而 switchTo 又把它的 onended 置空 → Waking 永远为 true → 宠物再也回不到
+   * 正常链（「叫醒她投喂，她却一直躺着不动」）。既然本来就要立刻换动画，
+   * 那就不要开那个头。
+   *
+   * @returns {boolean} 调用前是否处于睡眠态
+   */
+  PET_SLEEP_EndSleep() {
+    const was = this.PET_SLEEP_On === true;
+    const wasWaking = this.PET_SLEEP_Waking === true;
+    if (this.PET_SLEEP_Timer) {
+      clearTimeout(this.PET_SLEEP_Timer);
+      this.PET_SLEEP_Timer = null;
+    }
+    this.PET_SLEEP_Waking = false;
+    this.PET_SLEEP_WakeBy = 0;
+    this.PET_SLEEP_On = false;
+    this.PET_SLEEP_At = performance.now();
+    // 醒来 +3 只记一次：已经播过醒来动画（wasWaking）说明那 +3 早记过了。
+    if (was && !wasWaking) {
+      this.mood.event('wake');
+      this.renderMood();
+      this.moodSaveThrottled();
+    }
+    return was;
   }
 
   /** 跳过醒来动画：立刻脱离睡眠态，回随机链（不播任何过渡）。 */
@@ -1117,12 +1168,20 @@ class PetSprite {
     this.PET_SLEEP_Waking = false;
     this.PET_SLEEP_On = false;
     this.PET_SLEEP_At = performance.now();
+    this.PET_SLEEP_WakeBy = 0;
     console.info('[dsh-pet] wake skipped, back to random chain');
     this.playIdle();
   }
 
   /** 每 5 秒检查一次是否空闲到期。 */
   PET_SLEEP_Tick() {
+    // 醒来看门狗：见 PET_SLEEP_WAKE_MAX_MS 的注释。真走到这里说明醒来动画的
+    // onended 已经被别的 switchTo 摘掉了，再等下去就是永久定格 —— 强制脱离。
+    if (this.PET_SLEEP_Waking && this.PET_SLEEP_WakeBy > 0 && performance.now() > this.PET_SLEEP_WakeBy) {
+      console.warn('[dsh-pet] 醒来动画超时未结束（' + PET_SLEEP_WAKE_MAX_MS + 'ms），强制脱离睡眠态');
+      this.PET_SLEEP_Skip();
+      return;
+    }
     if (this.PET_SLEEP_On) return;
     const secs = PET_SLEEP_Seconds();
     if (!secs) return;
@@ -1143,6 +1202,17 @@ class PetSprite {
     this.PET_SLEEP_Wake();
   }
   playOnce(name) {
+    // 睡着 / 正在醒来：一律拒绝换动画。这是全项目「随机动作顶掉睡姿或醒来」的
+    // 唯一收口 —— moodCue、resumeWorkStatusAnim、events.js 的 workStatus /
+    // balance / whisper 都从这里过。
+    // 注意：**必须在改 this.anim 之前返回**。handleEnded 靠
+    // `this.anim === PET_SLEEP_WAKE` 判断醒来是否播完，先改 this.anim 会让那条
+    // 判断永远不成立，于是掉进下面的 `if (PET_SLEEP_On) { Loop(); return; }`
+    // 又睡回去 —— 这就是「刚醒来播完又躺下」的由来。
+    if (this.PET_SLEEP_On) {
+      console.info('[dsh-pet] 睡眠中，忽略动画切换：' + name);
+      return;
+    }
     this.anim = name;
     this.once = true;
     this.switchTo(name, true);
@@ -1193,6 +1263,7 @@ class PetSprite {
    * 只在**跨档**那一刻调（MoodState.event/tick 只在跨档时返回非 null），不会一直霸屏。
    */
   moodCue(to) {
+    if (this.PET_SLEEP_On) return; // 睡着时不引导（playOnce 也会拦，这里只是别打日志）
     const name = this.mood.cue();
     if (!name) return;
     console.log('[dsh-pet] pet=' + this.pet.id + ' 心情切档 -> ' + to +
@@ -1303,7 +1374,8 @@ class PetSprite {
       // 延后一点：preload/资源预热需要时间，立刻播可能闪
       setTimeout(() => {
         try {
-          if (this.PET_SLEEP_On) this.PET_SLEEP_Wake();
+          // 回归剧情马上要播自己的动画，所以别先播醒来动画（会被顶掉，留下僵尸 Waking）
+          if (this.PET_SLEEP_On) this.PET_SLEEP_EndSleep();
           this.playOnce(rd.anim);
         } catch { /* 播放失败不影响主体 */ }
       }, 1200);
@@ -1822,6 +1894,7 @@ class PetSprite {
       this.PET_SLEEP_Waking = false;
       this.PET_SLEEP_On = false; // 醒完了, 之后的点击恢复正常点击回应
       this.PET_SLEEP_At = performance.now();
+      this.PET_SLEEP_WakeBy = 0;
       if (this.animations.idle.length) this.playOnce(S.pick(this.animations.idle, this.anim));
       return;
     }
@@ -1935,8 +2008,11 @@ class PetSprite {
    * 中间池固定为用户指定的 5 个动作，不再从整个工作分类里捞。
    */
   WORK_Start() {
-    // 睡着时被要求工作 = 用户主动操作：先唤醒再工作。
-    this.PET_SLEEP_Wake();
+    // 睡着时被要求工作 = 用户主动操作：静默脱离睡眠态，然后立刻开始工作。
+    // 这里**不能**调 PET_SLEEP_Wake()：醒来动画刚起就会被下面的
+    // switchTo(PET_WORK_IN) 顶掉，Waking 卡在 true 再也不清 —— 之后宠物就
+    // 回不到正常链，表现为「叫醒她去做事，她却一直躺着」。
+    this.PET_SLEEP_EndSleep();
     if (this.WORK_On) return;
 
     const mid = PET_WORK_MID.filter((n) => this.hasAnim(n));
@@ -2233,6 +2309,7 @@ class PetSprite {
   // 互动/事件动画播完后恢复 workStatus 档位循环：非终态 → 按当前状态档位重选动画（多候选档内
   // 随机并避开当前段）；终态/空闲 → false 不接管，调用方走原逻辑（回 idle / 随机池，与浏览器一致）。
   resumeWorkStatusAnim() {
+    if (this.PET_SLEEP_On) return false; // 睡着/醒来期间不接管（单候选走 switchTo，playOnce 拦不住）
     const state = this.workState;
     if (!state || state === 'success' || state === 'error') return false;
     const pool = this.animations.events?.workStatus;
@@ -2527,11 +2604,14 @@ class PetSprite {
     // 记录本次按下是否为唤醒 —— 唤醒只发生在这里（按下的瞬间），
     // 随后的 click 读它来决定只收尾、还是播点击回应动画。
     this.PET_SLEEP_WokeByClick = this.PET_SLEEP_WasAsleep();
+    // 睡着时被点也算「互动」：先记时间再 return。
+    // 早先 return 写在 lastInteractionAt 之前 → 刚被摸醒的那一下不算交互，
+    // 徽标会立刻按「20 分钟没人理」判成无聊 🎈。
+    this.lastInteractionAt = Date.now();
     if (this.PET_SLEEP_WasAsleep()) { this.PET_SLEEP_Touch(); return; }
     this.PET_SLEEP_Touch();
     // 心情：被拎起来它不高兴（-4）。写在 pointerdown 而不是松手：拎一下就该不高兴，
     // 而不是等甩出去才算；且 pointerdown 每次抓起都会走到，不会漏掉"只是拎着没甩"。
-    this.lastInteractionAt = Date.now();
     const grabMood = this.mood.event('throwDrag');
     if (grabMood) this.moodCue(grabMood);
     this.renderMood();
@@ -3175,6 +3255,12 @@ class PetSprite {
       this.PET_SLEEP_FromMenu(leaf.anim);
       return;
     }
+    // 睡着时点播任意动画 = 用户主动操作：静默脱离睡眠态，再播点播的那一段。
+    // 不用 PET_SLEEP_Wake()：醒来动画会被下面的 switchTo 立刻顶掉，留下
+    // Waking=true 的僵尸状态（「点完菜单宠物停住不动」就是这么来的）。
+    // **必须放在移动分支之前**：tryMove 是直接 switchTo，绕过 playOnce 的睡眠守卫，
+    // 放后面的话睡着时点一个移动类动作会「边睡边走」，收尾还会掉回躺睡。
+    this.PET_SLEEP_EndSleep();
     // 文字类(noMirror)朝右站姿是镜像的: 点播前强制朝左
     if (S.isNoMirrorAnimation(this.animations.categories, leaf.anim) && this.facing === 'right') {
       this.facing = 'left';
@@ -3185,8 +3271,6 @@ class PetSprite {
       return;
     }
     // 其余(投饲/点击回应等)带锁连播: 播完才交回随机链
-    // 睡着时点播任意动画 = 用户主动操作：先唤醒，避免在睡眠标记里播其它动画（会卡死睡眠链）。
-    this.PET_SLEEP_Wake();
     this.PET_FEED_Play(leaf.anim);
   }
 

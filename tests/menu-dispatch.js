@@ -106,6 +106,9 @@ const makeShell = (rec) => {
     PET_SLEEP_Set: hit('PET_SLEEP_Set'),
     PET_SLEEP_FromMenu: hit('PET_SLEEP_FromMenu'),
     PET_SLEEP_Wake: hit('PET_SLEEP_Wake'),
+    // 2026-10-30：菜单点播改为「静默脱离睡眠态再播自己的动画」。
+    // 这里两个都桩，断言只看"有没有脱离睡眠"，具体走哪个方法不重要。
+    PET_SLEEP_EndSleep: hit('PET_SLEEP_EndSleep'),
     PET_FEED_Play: hit('PET_FEED_Play'),
     PET_FEED: hit('PET_FEED'),
     workBreakRec: hit('WORK_Break'),
@@ -196,8 +199,8 @@ ok(moveRes.rec.includes('tryMove:移动到左边'), '移动类动画走 tryMove'
 const plainLeaf = leaves.find((l) => l.anim === '待机1');
 const plainRes = plainLeaf ? callLeaf(null, plainLeaf) : { rec: [] };
 ok(
-  plainRes.rec.includes('PET_FEED_Play:待机1') && plainRes.rec.includes('PET_SLEEP_Wake'),
-  '普通动画唤醒后连播',
+  plainRes.rec.includes('PET_FEED_Play:待机1') && plainRes.rec.includes('PET_SLEEP_EndSleep'),
+  '普通动画先脱离睡眠态再连播',
   JSON.stringify(plainRes.rec),
 );
 // noMirror 类：朝右站姿先强制朝左（靠 shell.facing 观察）
