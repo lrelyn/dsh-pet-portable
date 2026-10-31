@@ -1149,7 +1149,12 @@ class PetSprite {
     this.PET_SLEEP_Waking = false;
     this.PET_SLEEP_WakeBy = 0;
     this.PET_SLEEP_On = false;
-    this.PET_SLEEP_At = performance.now();
+    // 睡眠计时只在「本来真的在睡」时才重置。
+    // 这条守卫是 2026-10-31 补的：原来无条件重置，而 WORK_Start() 也调本方法
+    // （每空闲 300 秒自动工作一次），于是一到午后档需要 900 秒才睡的时候，
+    // 计时每 300 秒被清回 0 —— 永远到不了 900，表现为「她不会自己睡觉了」。
+    // 清醒时调用本方法必须是纯 no-op（旧 PET_SLEEP_Wake 靠 `if (!On) return` 天然如此）。
+    if (was) this.PET_SLEEP_At = performance.now();
     // 醒来 +3 只记一次：已经播过醒来动画（wasWaking）说明那 +3 早记过了。
     if (was && !wasWaking) {
       this.mood.event('wake');

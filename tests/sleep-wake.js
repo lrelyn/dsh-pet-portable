@@ -105,7 +105,8 @@ function freshMachine(opt = {}) {
     { log: () => {}, warn: () => {}, info: () => {}, error: () => {} },
     setTimeoutStub, clearTimeoutStub, fakePerf,
     WAKE_MAX_MS, SLEEP_IN, SLEEP_LOOP, SLEEP_WAKE,
-    () => 600, () => 300,
+    opt.secs === undefined ? () => 600 : () => opt.secs,
+    opt.need === undefined ? () => 300 : () => opt.need,
   );
 
   Object.assign(m, {
@@ -258,6 +259,24 @@ console.log('\n=== 6. PET_SLEEP_EndSleep（静默脱离）===');
   const r3 = m3.PET_SLEEP_EndSleep();
   ok(r3 === false, '没睡时 EndSleep 返回 false');
   ok(m3.moodEvents.length === 0, '没睡时不记任何心情事件');
+
+  // 2026-10-31 回归：EndSleep 无条件重置 PET_SLEEP_At，而 WORK_Start() 每
+  // 空闲 300 秒就调它一次 —— 午后档要 900 秒才睡，于是永远睡不成。
+  // 清醒时调用必须是纯 no-op，绝不能碰睡眠计时。
+  const m4 = freshMachine();
+  m4.PET_SLEEP_At = 12345;
+  clock += 60000;
+  m4.PET_SLEEP_EndSleep();
+  ok(m4.PET_SLEEP_At === 12345, '没睡时 EndSleep **不改**睡眠计时（否则自动工作会不断推远入睡）');
+
+  // 睡着时反过来必须重置：醒来后要重新攒空闲时间
+  const m5 = freshMachine();
+  sleepToLoop(m5);
+  const beforeAt = m5.PET_SLEEP_At;
+  clock += 60000;
+  m5.PET_SLEEP_EndSleep();
+  ok(m5.PET_SLEEP_At !== beforeAt, '睡着时 EndSleep 重置睡眠计时（醒来重新攒空闲）');
+  ok(m5.PET_SLEEP_At === clock, '重置到「现在」');
 }
 
 // ---------------------------------------------------------------- 7. 看门狗：醒来超时强制脱离
@@ -353,6 +372,14 @@ console.log('\n=== 9. 源码结构（顺序 / 调用点白名单）===');
   const endSleepCalls = (spriteSrc.match(/this\.PET_SLEEP_EndSleep\(\)/g) || []).length;
   ok(endSleepCalls >= 4, `EndSleep 至少被 4 处调用（投喂/菜单/工作/回归剧情），实际 ${endSleepCalls}`);
 
+  // 9.5b 2026-10-31 回归源头：EndSleep 无条件重置 PET_SLEEP_At，而 WORK_Start()
+  // 也调它（每空闲 300 秒自动工作一次）→ 午后档要 900 秒才睡，计时每 300 秒
+  // 被清回 0，永远睡不着。这条断言钉死「只有真的在睡才重置」。
+  ok(/if \(was\)\s*this\.PET_SLEEP_At = performance\.now\(\);/.test(bodies.PET_SLEEP_EndSleep || ''),
+    'EndSleep 的睡眠计时重置被 `if (was)` 守住（否则自动工作会无限推远入睡）');
+  ok(!/^\s*this\.PET_SLEEP_At = performance\.now\(\);\s*$/m.test(bodies.PET_SLEEP_EndSleep || ''),
+    'EndSleep 里没有裸的 PET_SLEEP_At 重置');
+
   // 9.6 events.js 的两处守卫
   ok(/if \(this\.PET_SLEEP_On\) return;[\s\S]{0,120}?if \(!this\.pet\.workStatusEnabled\) return;/.test(rawEvents),
     'events.js onWorkTick 有睡眠守卫（本地检测器每 5 秒一次，旧版会顶掉醒来）');
@@ -374,6 +401,45 @@ console.log('\n=== 10. 与徽标的联动 ===');
   if (moodEl) {
     ok(/sleeping:\s*this\.PET_SLEEP_On === true/.test(moodEl[0]), 'renderMood 用 this.PET_SLEEP_On 作为 sleeping 输入');
   }
+}
+
+// ---------------------------------------------------------------- 11. 自动工作不再阻止入睡（2026-10-31）
+console.log('\n=== 11. 自动工作不会推远入睡计时 ===');
+{
+  // 真实参数：PET_WORK_IDLE_SEC = 300（空闲 5 分钟自动工作一次），
+  // 午后档 need = 900（10 分钟基准 × 1.5）。旧代码每次都把 PET_SLEEP_At 清回 0，
+  // 于是 900 秒永远攒不满 —— 用户看到的「她不会自己睡觉了」。
+  // 注意单位：PET_SLEEP_Tick 用毫秒比较，need 传的是**秒**。
+  const NEED_SEC = 900;
+  const TICK_MS = 5000;                 // PET_SLEEP_Tick 每 5 秒一次
+  const WORK_EVERY_MS = 300 * 1000;     // 每 300 秒自动工作一次
+  const m = freshMachine({ secs: 600, need: NEED_SEC });
+  let sleptAtMs = -1;
+  let workRuns = 0;
+  for (let elapsed = 0; elapsed <= 1200 * 1000; elapsed += TICK_MS) {
+    clock += TICK_MS;
+    // 到点就「自动工作」：WORK_Start() 对睡眠的唯一副作用就是这一句
+    if (elapsed > 0 && elapsed % WORK_EVERY_MS === 0) {
+      m.WORK_On = true;
+      m.PET_SLEEP_EndSleep();
+      m.WORK_On = false;
+      workRuns++;
+    }
+    m.PET_SLEEP_Tick();
+    if (m.PET_SLEEP_On && sleptAtMs < 0) sleptAtMs = elapsed + TICK_MS;
+  }
+  ok(workRuns >= 3, `期间确实自动工作过 ${workRuns} 次（每 ${WORK_EVERY_MS / 1000} 秒一次）`);
+  ok(sleptAtMs > 0, '空闲期间会自己睡着（旧代码这里永远睡不成）', 'sleptAtMs=' + sleptAtMs);
+  ok(sleptAtMs >= NEED_SEC * 1000 && sleptAtMs <= NEED_SEC * 1000 + 2 * TICK_MS,
+    `入睡时刻约等于 need=${NEED_SEC} 秒（实际 ${sleptAtMs / 1000} 秒）`);
+
+  // 反向：一次交互（PET_SLEEP_Touch）之后必须重新攒满一整轮
+  const m2 = freshMachine({ secs: 600, need: NEED_SEC });
+  for (let elapsed = 0; elapsed < 600 * 1000; elapsed += TICK_MS) { clock += TICK_MS; m2.PET_SLEEP_Tick(); }
+  ok(m2.PET_SLEEP_On === false, '600 秒（< need）还没睡');
+  m2.PET_SLEEP_Touch();
+  for (let elapsed = 0; elapsed < 600 * 1000; elapsed += TICK_MS) { clock += TICK_MS; m2.PET_SLEEP_Tick(); }
+  ok(m2.PET_SLEEP_On === false, '被摸一下之后重新计时，600 秒仍不睡');
 }
 
 console.log(`\n=== ${pass} 通过 / ${fail} 失败 ===`);
