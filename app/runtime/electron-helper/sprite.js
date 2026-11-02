@@ -1104,11 +1104,13 @@ class PetSprite {
       this.PET_SLEEP_Skip();
       return;
     }
-    // 唤醒动画**已在播放**时再被触发（连点 / 右键 / 投喂 / 菜单）：直接返回。
+    // 唤醒动画**已在播放**时再被触发（右键 / 投喂 / 菜单 / 状态树）：直接返回。
     // 这里曾经是 `if (Waking) { PET_SLEEP_Skip(); return; }` —— Skip 会立刻把
     // On 置 false 并 playIdle()，把正在播的醒来动画当场掐掉。连点两下就再也
     // 看不到醒来过程，这正是「唤醒又被挤掉了」的第一主因。幂等返回才是对的：
     // 第一次唤醒说了算，后来的请求一律让路。
+    // 唯一例外是左键再点一下（见 PET_SLEEP_OnPress）：那条路径走 EndSleep 静默
+    // 脱离后当普通点击，不经过这里。
     if (this.PET_SLEEP_Waking) return;
     if (this.PET_SLEEP_Timer) {
       clearTimeout(this.PET_SLEEP_Timer);
@@ -1205,6 +1207,49 @@ class PetSprite {
   PET_SLEEP_Touch() {
     this.PET_SLEEP_At = performance.now();
     this.PET_SLEEP_Wake();
+  }
+
+  /**
+   * 左键按下的睡眠总闸：把「睡着 / 正在醒来 / 清醒」三态一次分派完。
+   *
+   * @returns {boolean} true = 这次按下已经被睡眠逻辑用掉了（调用方直接 return）
+   *
+   * 三态各自的语义（2026-11-02 用户要求「睡眠点击第一下触发唤醒，第二下可正常打断」）：
+   *   ① 清醒      —— 重置入睡计时（Touch），返回 false，让按下继续走拖拽/点击回应。
+   *   ② 睡着      —— 叫醒。同时置 WokeByClick，onClick 据此只收尾、不播点击回应
+   *                  （否则点击动画一帧顶掉醒来段，就是「点了没反应」）。
+   *   ③ 正在醒来  —— **第二下打断**：静默脱离睡眠态（EndSleep，不切动画、不重复记 wake），
+   *                  返回 false 让这一下当普通点击继续走 —— 会播点击回应、加好感、记心情。
+   *                  此前这里和 ② 合并处理，第二下被 Wake 的幂等 return 吞掉，且 onClick 又因
+   *                  WokeByClick 提前返回 —— 连点两下完全没反馈，她要愣在那儿播完整段醒来。
+   */
+  PET_SLEEP_OnPress() {
+    if (this.PET_SLEEP_Waking) {
+      // 第二下：当场结束醒来动画，脱离睡眠态，继续当普通点击。
+      this.PET_SLEEP_EndSleep();
+      this.PET_SLEEP_WokeByClick = false;
+      return false;
+    }
+    if (!this.PET_SLEEP_On) {
+      // 自愈：上一次按下叫醒后没等到 click（拖歪了/移出窗口），标志会残留成 true，
+      // 下一次点击就被 onClick 白白吞掉。旧实现每次 pointerdown 都重算本标志，
+      // 天然不会残留；这里补回同样的效果。
+      this.PET_SLEEP_WokeByClick = false;
+      // 清醒时按一下也要重置入睡计时（Touch = At 归零 + Wake，而 Wake 在清醒时是空转）。
+      // 少了这一句，用户一直在点她、计时却照攒，点着点着她就睡着了。
+      this.PET_SLEEP_Touch();
+      return false;
+    }
+    // 第一下：叫醒。本次 click 只收尾。
+    this.PET_SLEEP_WokeByClick = true;
+    this.PET_SLEEP_Touch();
+    // 唤醒素材缺失时 Wake 会走 Skip 直接脱离睡眠态（根本没播醒来段）：
+    // 这一下没有「收尾」可言，撤销标志，让 onClick 照常给点击回应。
+    if (!this.PET_SLEEP_On) {
+      this.PET_SLEEP_WokeByClick = false;
+      return false;
+    }
+    return true;
   }
   playOnce(name) {
     // 睡着 / 正在醒来：一律拒绝换动画。这是全项目「随机动作顶掉睡姿或醒来」的
@@ -2606,15 +2651,14 @@ class PetSprite {
     // 交互打断正在播的投喂/菜单点播动画：清掉它的锁。否则锁会一直残留
     // （this.anim 已被拖拽动画替换，条件永远不匹配，锁永远清不掉 —— 无害但脏）。
     this.PET_FEED_Clip = null;
-    // 记录本次按下是否为唤醒 —— 唤醒只发生在这里（按下的瞬间），
-    // 随后的 click 读它来决定只收尾、还是播点击回应动画。
-    this.PET_SLEEP_WokeByClick = this.PET_SLEEP_WasAsleep();
-    // 睡着时被点也算「互动」：先记时间再 return。
+    // 睡着时被点也算「互动」：先记时间再处理睡眠。
     // 早先 return 写在 lastInteractionAt 之前 → 刚被摸醒的那一下不算交互，
     // 徽标会立刻按「20 分钟没人理」判成无聊 🎈。
     this.lastInteractionAt = Date.now();
-    if (this.PET_SLEEP_WasAsleep()) { this.PET_SLEEP_Touch(); return; }
-    this.PET_SLEEP_Touch();
+    // 睡眠三态全在 PET_SLEEP_OnPress 里：睡着=叫醒（本次按下只收尾，由 onClick 读
+    // WokeByClick 跳过点击回应）；醒来动画播放中=第二下打断（静默脱离后当普通点击）；
+    // 没睡=照常。返回 true 表示这次按下已经用掉了。
+    if (this.PET_SLEEP_OnPress()) return;
     // 心情：被拎起来它不高兴（-4）。写在 pointerdown 而不是松手：拎一下就该不高兴，
     // 而不是等甩出去才算；且 pointerdown 每次抓起都会走到，不会漏掉"只是拎着没甩"。
     const grabMood = this.mood.event('throwDrag');

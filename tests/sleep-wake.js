@@ -41,6 +41,7 @@ const NAMES = [
   ['PET_SLEEP_Tick', '\\(\\)'],
   ['PET_SLEEP_Touch', '\\(\\)'],
   ['PET_SLEEP_WasAsleep', '\\(\\)'],
+  ['PET_SLEEP_OnPress', '\\(\\)'],
   ['playOnce', '\\(name\\)'],
   ['moodCue', '\\(to\\)'],
 ];
@@ -440,6 +441,74 @@ console.log('\n=== 11. 自动工作不会推远入睡计时 ===');
   m2.PET_SLEEP_Touch();
   for (let elapsed = 0; elapsed < 600 * 1000; elapsed += TICK_MS) { clock += TICK_MS; m2.PET_SLEEP_Tick(); }
   ok(m2.PET_SLEEP_On === false, '被摸一下之后重新计时，600 秒仍不睡');
+}
+
+// ---------------------------------------------------------------- 12. 点击三态（2026-11-02）
+// 用户要求：「睡眠点击第一下触发唤醒，第二下可正常打断」。
+// 三态（清醒 / 睡着 / 正在醒来）全在 PET_SLEEP_OnPress 里分派，这里逐态钉死返回值与副作用。
+// 返回值：true = 这次按下已被睡眠逻辑用掉（onPointerDown 直接 return）；
+//         false = 继续当普通点击走（拖拽 / 点击回应 / 好感 / 心情）。
+console.log('\n=== 12. 点击三态：睡着叫醒 / 醒来中打断 / 清醒照常 ===');
+{
+  // 12.1 清醒：什么都不做
+  const m0 = freshMachine();
+  const before0 = m0.log.length;
+  ok(m0.PET_SLEEP_OnPress() === false, '清醒时返回 false（按下继续走普通逻辑）');
+  ok(m0.PET_SLEEP_WokeByClick === false, '清醒时不会误置 WokeByClick');
+  ok(m0.log.length === before0, '清醒时没有切任何动画', before0 + ' → ' + m0.log.length);
+
+  // 12.2 睡着：第一下叫醒，返回 true（本次 click 只收尾）
+  const m1 = freshMachine();
+  sleepToLoop(m1);
+  ok(m1.PET_SLEEP_On === true, '前置：已进入睡眠态');
+  ok(m1.PET_SLEEP_OnPress() === true, '睡着时第一下返回 true（这次按下被睡眠逻辑用掉）');
+  ok(m1.PET_SLEEP_Waking === true, '第一下进入醒来态');
+  ok(m1.anim === SLEEP_WAKE, '第一下切到醒来段', m1.anim);
+  ok(m1.PET_SLEEP_WokeByClick === true, '第一下置 WokeByClick（onClick 据此跳过点击回应）');
+  ok(m1.moodEvents.filter((e) => e === 'wake').length === 1, '第一下记一次 wake 心情');
+
+  // 12.3 醒来动画播放中：第二下打断，返回 false（当普通点击，能播点击回应）
+  const logBefore2 = m1.log.length;
+  ok(m1.PET_SLEEP_OnPress() === false, '醒来中第二下返回 false（不再被 Wake 的幂等 return 吞掉）');
+  ok(m1.PET_SLEEP_On === false, '第二下脱离睡眠态（On=false）');
+  ok(m1.PET_SLEEP_Waking === false, '第二下清掉 Waking');
+  ok(m1.PET_SLEEP_WokeByClick === false, '第二下清掉 WokeByClick（onClick 不再提前 return）');
+  ok(m1.anim === SLEEP_WAKE, '第二下不切动画（EndSleep 静默脱离，点击回应交给 onClick）', m1.anim);
+  ok(m1.log.filter((x) => x === 'playIdle').length === 0, '第二下没有 playIdle（只有 Skip 才会抢动画）');
+  ok(m1.log.length === logBefore2, '第二下没有再切任何动画', logBefore2 + ' → ' + m1.log.length);
+  ok(m1.moodEvents.filter((e) => e === 'wake').length === 1, '第二下不重复记 wake');
+
+  // 12.4 脱离之后再点：回到「清醒」分支
+  ok(m1.PET_SLEEP_OnPress() === false, '脱离后再点仍是 false（清醒态）');
+  ok(m1.PET_SLEEP_WokeByClick === false, '脱离后再点不置 WokeByClick');
+
+  // 12.4b 残留标志自愈：右键唤醒后没有 click（右击不触发 click），WokeByClick 会一直挂着，
+  // 不清掉的话下一记左键会被 onClick 白白吞掉。旧实现每次 pointerdown 都重算本标志，
+  // 天然免疫；改成 OnPress 分派后必须补回同样的效果。
+  const m3 = freshMachine();
+  m3.PET_SLEEP_WokeByClick = true;
+  ok(m3.PET_SLEEP_OnPress() === false, '清醒时按一下照常返回 false');
+  ok(m3.PET_SLEEP_WokeByClick === false, '清醒时按一下会把残留的 WokeByClick 清掉（否则下一次点击被吞）');
+
+  // 12.5 唤醒素材缺失：Wake 走 Skip 当场脱离，这一下没有「收尾」可言 → 撤销标志
+  const m2 = freshMachine({ missing: [SLEEP_WAKE] });
+  sleepToLoop(m2);
+  ok(m2.PET_SLEEP_OnPress() === false, '唤醒素材缺失时返回 false（没有醒来段可收尾）');
+  ok(m2.PET_SLEEP_On === false, '唤醒素材缺失时已脱离睡眠态');
+  ok(m2.PET_SLEEP_WokeByClick === false, '唤醒素材缺失时 WokeByClick 被撤销（onClick 照常给点击回应）');
+
+  // 12.6 源码结构：分派点唯一。旧实现是两处 WasAsleep 分支，第二下正是从那里漏掉的
+  const pd = spriteSrc.match(/\n  onPointerDown\(e\) \{[\s\S]*?\n  \}\n/);
+  ok(!!pd, '找到 onPointerDown 方法体');
+  if (pd) {
+    ok(/if \(this\.PET_SLEEP_OnPress\(\)\) return;/.test(pd[0]), 'onPointerDown 用 OnPress() 一次分派睡眠三态');
+    ok(!/PET_SLEEP_WasAsleep/.test(pd[0]), 'onPointerDown 里不再有旧的 WasAsleep 双分支');
+    const li = pd[0].indexOf('this.lastInteractionAt = Date.now();');
+    const op = pd[0].indexOf('PET_SLEEP_OnPress()');
+    ok(li >= 0 && op >= 0 && li < op, 'lastInteractionAt 写在睡眠处理之前（摸醒那一下也算互动）');
+  }
+  const oc = spriteSrc.match(/\n  onClick\(e\) \{[\s\S]*?\n  \}\n/);
+  ok(!!oc && /if \(this\.PET_SLEEP_WokeByClick\) \{/.test(oc[0]), 'onClick 仍靠 WokeByClick 跳过「第一下」的点击回应');
 }
 
 console.log(`\n=== ${pass} 通过 / ${fail} 失败 ===`);
