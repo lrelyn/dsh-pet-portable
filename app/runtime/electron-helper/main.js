@@ -1063,8 +1063,16 @@ app.whenReady().then(() => {
 
   // 冒烟自检模式（默认关闭）：DSH_PET_SMOKE=1 时延时截图到 DSH_PET_SMOKE_OUT 后退出，
   // 用于验证窗口/渲染/动画链路（如 CI 或本地验证）。
+  //
+  // DSH_PET_SMOKE_KEEP=1：跑完**不退出**，把 dump 写到 DSH_PET_SMOKE_JSON（默认同目录 .json）。
+  // 为什么需要它：上面这套 executeJavaScript 是唯一能在真实渲染进程里驱动交互的通道
+  // （主进程有 webContents），而"醒来动画被挤掉"这类 bug 只有在真渲染进程里才体现得出来。
+  // 之前每次都靠 app.quit() 收尾，导致「验证完桌宠就没了」。这个开关只改收尾动作，
+  // 前面的驱动逻辑一字不动。
   if (process.env.DSH_PET_SMOKE === '1') {
     const smokeOut = process.env.DSH_PET_SMOKE_OUT || path.join(app.getPath('temp'), 'dsh-pet-smoke.png');
+    const smokeKeep = process.env.DSH_PET_SMOKE_KEEP === '1';
+    const smokeJson = process.env.DSH_PET_SMOKE_JSON || smokeOut.replace(/\.png$/i, '') + '.json';
     const afterMs = Number(process.env.DSH_PET_SMOKE_AFTER_MS || 9000);
     const target = windows.values().next().value;
     if (target) {
@@ -1373,12 +1381,168 @@ app.whenReady().then(() => {
           const image = await first.webContents.capturePage();
           writeFileSync(smokeOut, image.toPNG());
           console.log('[dsh-pet-desktop-helper] smoke capture:', smokeOut);
+          // KEEP 模式下把 dump 落成文件：不落文件就只能从 stdout 捞，
+          // 而 stdout 在本机的 launcher 里会被吞掉（只留 pet.log）。
+          if (smokeKeep) writeFileSync(smokeJson, JSON.stringify(dump, null, 2), 'utf8');
         }
       } catch (error) {
         console.error('[dsh-pet-desktop-helper] smoke capture failed:', error);
       }
-      setTimeout(() => app.quit(), 500);
+      if (!smokeKeep) setTimeout(() => app.quit(), 500);
     }, afterMs);
+  }
+
+  // 睡眠/唤醒实机探针（默认关闭）：DSH_PET_SLEEP_PROBE=1。
+  //
+  // 为什么必须上实机：醒来被挤掉的根因是 switchTo() 一进来就 oldEl.onended = null，
+  // 这件事只有真 <video> 元素、真 ended 事件才体现得出来，jsdom 桩测不出来
+  // （tests/sleep-wake.js 第 13 节是手写假 video 才能覆盖的）。
+  //
+  // **判定不能只看「最后状态干净」**：醒来被挤掉之后，看门狗 PET_SLEEP_Tick 会在
+  // PET_SLEEP_WAKE_MAX_MS(12s) 后强制 PET_SLEEP_Skip()，状态同样会变干净 —— 于是
+  // 「被挤掉」和「正常收尾」两种结局的最后快照长得一样。第一次写这个探针就是这么
+  // 误判的：摘掉守卫的反证版本也报 ok=true。所以必须记录**是谁**把状态清掉的：
+  // 给 handleEnded / EndSleep / Skip / Loop 各挂一个计数器，正常收尾 = handleEnded
+  // 的醒来分支恰好 +1 且耗时 < 醒来段时长 + 余量；被挤掉 = 只有 Skip 或看门狗 +1。
+  if (process.env.DSH_PET_SLEEP_PROBE === '1') {
+    const probeOut =
+      process.env.DSH_PET_SLEEP_PROBE_OUT || path.join(app.getPath('temp'), 'dsh-pet-sleep-probe.json');
+    const probeAfterMs = Number(process.env.DSH_PET_SLEEP_PROBE_AFTER_MS || 6000);
+    setTimeout(async () => {
+      try {
+        const first = windows.values().next().value;
+        if (!first || first.isDestroyed()) throw new Error('no live window');
+        const json = await first.webContents.executeJavaScript(`(async () => {
+          const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+          const out = { sections: {}, errors: [], counters: {} };
+          const s = (typeof sprites !== 'undefined' && sprites && sprites[0]) || null;
+          out.hasSprite = !!s;
+          if (!s) return JSON.stringify(out);
+          const frontEl = () => (s.front === 0 ? s.videoA : s.videoB);
+          const backEl = () => (s.front === 0 ? s.videoB : s.videoA);
+          const clean = (u) => decodeURIComponent(String(u || '')).replace(/^.*\\//, '');
+          const snap = (tag) => {
+            const el = frontEl();
+            const b = backEl();
+            return {
+              tag, anim: s.anim, once: s.once,
+              On: s.PET_SLEEP_On === true, Waking: s.PET_SLEEP_Waking === true,
+              WakeBy: Math.round(s.PET_SLEEP_WakeBy || 0),
+              front: clean(el && el.src), back: clean(b && b.src),
+              pending: s.pending ? s.pending.anim : '',
+              onended: !!(el && typeof el.onended === 'function'),
+            };
+          };
+          out.consts = { IN: PET_SLEEP_IN, LOOP: PET_SLEEP_LOOP, WAKE: PET_SLEEP_WAKE, WAKE_MAX: PET_SLEEP_WAKE_MAX_MS };
+          const idle = (s.animations.idle || [])[0] || '';
+
+          // 记录「谁把状态清掉的」：直接包方法，不改业务代码。
+          const c = { handleEnded: 0, endless: 0, skip: 0, loop: 0, endedWhileWaking: 0 };
+          const wrap = (name, key) => {
+            const orig = s[name];
+            if (typeof orig !== 'function') return;
+            s[name] = function () {
+              c[key]++;
+              if (name === 'handleEnded' && this.PET_SLEEP_Waking && this.anim === PET_SLEEP_WAKE) c.endedWhileWaking++;
+              return orig.apply(this, arguments);
+            };
+          };
+          wrap('handleEnded', 'handleEnded');
+          wrap('PET_SLEEP_EndSleep', 'endless');
+          wrap('PET_SLEEP_Skip', 'skip');
+          wrap('PET_SLEEP_Loop', 'loop');
+
+          // 归零：先强制脱离任何残留睡眠/醒来态，等它稳住
+          if (s.PET_SLEEP_On || s.PET_SLEEP_Waking) s.PET_SLEEP_EndSleep();
+          await sleep(600);
+          out.sections.baseline = snap('baseline');
+          for (const k in c) c[k] = 0;
+
+          // 明确定义的时序：入睡 → 立刻叫醒（不依赖 PET_SLEEP_Tick 的空闲计时触发）
+          s.PET_SLEEP_Start();
+          const tSleep = Date.now();
+          while (Date.now() - tSleep < 4000) {
+            if (s.PET_SLEEP_On === true && s.anim === PET_SLEEP_IN) break;
+            await sleep(100);
+          }
+          out.sections.asleep = snap('asleep');
+
+          s.PET_SLEEP_Wake();
+          const tWake = Date.now();
+          out.sections.waking = snap('wake +0ms');
+          await sleep(150);
+
+          // 醒来期间把历史上各自漏过守卫的调用方挨个触发一遍。
+          // WORK_Start 故意不放进来：它内部先 EndSleep 再 WORK_IN，是明确的打断语义，
+          // 会正常结束醒来 —— 那是设计行为，不是 bug。这里测的是"漏了守卫会怎样"。
+          //
+          // 判据用「醒来的 video 还在前台 + anim 还是醒来段 + onended 还没被摘」，
+          // 不能用 pending：醒来视频 load 期间 pending 本来就是 null，比不出来。
+          const wakeEl = frontEl();
+          const attempts = [];
+          const attempt = (label, fn) => {
+            try { fn(); } catch (e) { out.errors.push(label + ': ' + String(e)); }
+            const nowFront = frontEl();
+            attempts.push({
+              label,
+              frontStillWake: nowFront === wakeEl && clean(nowFront && nowFront.src) === String(PET_SLEEP_WAKE) + '.webm',
+              animStillWake: s.anim === PET_SLEEP_WAKE,
+              onendedAlive: typeof (nowFront && nowFront.onended) === 'function',
+              front: clean(nowFront && nowFront.src),
+              anim: s.anim,
+            });
+          };
+          if (idle) attempt('playOnce(idle)', () => s.playOnce(idle));
+          if (s.showWhisper) attempt('showWhisper', () => s.showWhisper('探针碎碎念'));
+          if (s.showBalanceNow) attempt('showBalanceNow', () => s.showBalanceNow({ ok: true, provider: 'probe', balance: 1 }));
+          attempt('moodCue', () => { s.mood && s.mood.event && s.mood.event('click'); s.moodCue && s.moodCue(s.mood.current); });
+          if (idle) attempt('先写 anim 再 switchTo', () => { s.anim = idle; s.once = true; s.switchTo(idle, true); });
+          if (s.scheduleNextIdle) attempt('scheduleNextIdle', () => s.scheduleNextIdle());
+          attempt('switchTo(WORK_IN)', () => s.switchTo(PET_WORK_IN, true));
+          out.sections.attempts = attempts;
+          out.sections.afterAttempts = snap('after attempts');
+
+          // 等醒来段自己播完（10.042s）；上限放在看门狗 12s 之下，让看门狗没机会顶替
+          while (Date.now() - tWake < 11500) {
+            if (s.PET_SLEEP_On !== true && s.PET_SLEEP_Waking !== true) break;
+            await sleep(100);
+          }
+          out.sections.afterWait = snap('after wake clip end');
+          out.sections.waitMs = Date.now() - tWake;
+          out.counters = c;
+          await sleep(1200);
+          out.sections.settled = snap('after settle');
+
+          // 判定：正常收尾 = handleEnded 的醒来分支正好触发 1 次、没有 Skip、且在醒来段时长+余量内结束。
+          // 被挤掉 = endedWhileWaking 为 0（onended 被摘 → 醒来段播完无人接手）。
+          out.verdict = {
+            wakeEndedByHandler: c.endedWhileWaking,
+            wakeSkipped: c.skip,
+            waitMs: out.sections.waitMs,
+            settledClean: out.sections.afterWait.On === false && out.sections.afterWait.Waking === false,
+            allAttemptsBlocked: attempts.every((a) => a.frontStillWake && a.animStillWake && a.onendedAlive),
+          };
+          out.verdict.normal = out.verdict.wakeEndedByHandler === 1 &&
+            out.verdict.wakeSkipped === 0 &&
+            out.verdict.settledClean &&
+            out.verdict.allAttemptsBlocked;
+          return JSON.stringify(out);
+        })()`);
+        const probe = JSON.parse(json);
+        writeFileSync(probeOut, JSON.stringify(probe, null, 2), 'utf8');
+        console.log(
+          '[dsh-pet-desktop-helper] sleep probe normal=' +
+          (probe.verdict ? probe.verdict.normal : false) +
+          ' verdict=' + JSON.stringify(probe.verdict || null) + ' ->', probeOut);
+      } catch (error) {
+        console.error('[dsh-pet-desktop-helper] sleep probe failed:', error);
+        try { writeFileSync(probeOut, JSON.stringify({ ok: false, reason: String(error) }, null, 2), 'utf8'); } catch { }
+      }
+      // 默认**不退出**：宿主 HelperProcess 在 helper 退出后会 scheduleRestart 重启它，
+      // 而重启会再带一次同样的环境变量 → 探针无限重跑。桌宠本来就该一直开着，
+      // 所以跑完就留着。真要收工加 DSH_PET_SLEEP_PROBE_QUIT=1。
+      if (process.env.DSH_PET_SLEEP_PROBE_QUIT === '1') setTimeout(() => app.quit(), 500);
+    }, probeAfterMs);
   }
 });
 

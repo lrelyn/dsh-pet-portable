@@ -765,6 +765,40 @@ class PetSprite {
   // 双缓冲切换（与浏览器同一套：前台 opacity 切换 + 降级视频清 handler 并停播，防残留 ended 雪崩）
   switchTo(next, nextOnce) {
     if (!next) return;
+    // 醒来保护（不变量收口）：醒来动画能不能播完，只取决于它自己的 onended 有没有被摘掉，
+    // 而本方法一进来就摘旧 video 的 onended（见下方照搬上游的修复）。历史上每加一个会切动画
+    // 调用方（playOnce / moodCue / events.js 的碎碎念与余额 / scheduleNextIdle / tryMove /
+    // 菜单分发 / WORK_Start …），就得在那边补一条 `if (this.PET_SLEEP_On) return;`，
+    // 漏一处就复发一次「唤醒动画被掐掉 → Waking 卡住 → 播完也不回随机链」。
+    // 所以把这条不变量挪到唯一必经环节：醒来期间只允许切到醒来动画本身。
+    // 想真正打断醒来的路径必须先走 PET_SLEEP_EndSleep() / PET_SLEEP_Skip()（它们会先把
+    // Waking 清成 false）——现有全部打断点都是这么做的，因此本条守卫不会挡住任何合法操作。
+    // 带 WakeBy 自愈：看门狗每 5 秒才跑一次，超时后即便没人清理也不该继续拦。
+    if (this.PET_SLEEP_Waking && next !== PET_SLEEP_WAKE) {
+      const overdue = this.PET_SLEEP_WakeBy > 0 && performance.now() > this.PET_SLEEP_WakeBy;
+      if (!overdue) {
+        // 光 return 不够：tryMove() / scheduleNextIdle() 是「先写 this.anim 再调 switchTo」，
+        // 早退会留下「anim 已是新名字、前台还是醒来段」的错位 —— handleEnded 里
+        // `this.anim === PET_SLEEP_WAKE` 立刻失效，醒来照样收不了尾，bug 只是换了个样子。
+        // 所以把状态回滚到醒来段。pendingMove 同理：它挡着下一次 tryMove，不清会「走不动」。
+        this.anim = PET_SLEEP_WAKE;
+        this.once = true;
+        if (this.pendingMove) this.pendingMove = null;
+        if (this.moveRef !== null) this.stopMove();
+        console.info('[dsh-pet] 醒来动画播放中，忽略动画切换：' + next);
+        // 落盘留证：渲染端 console 不进 pet.log，复发时只能靠这行定位是谁抢的动画。
+        try {
+          window.petBridge && window.petBridge.diag &&
+            window.petBridge.diag('[sleep] 醒来期间拦下切换：' + next + '（醒来段=' + PET_SLEEP_WAKE + '）');
+        } catch { /* 诊断失败不影响主体 */ }
+        return;
+      }
+      console.warn('[dsh-pet] 醒来动画已超时（' + PET_SLEEP_WAKE_MAX_MS + 'ms），放行切换：' + next);
+      try {
+        window.petBridge && window.petBridge.diag &&
+          window.petBridge.diag('[sleep] 醒来超时，放行切换：' + next);
+      } catch { /* 诊断失败不影响主体 */ }
+    }
     const pending = this.pending;
     if (pending && pending.anim === next && pending.once === nextOnce) {
       // 防重命中（单动画点击时目标=当前动画，不重播）：仍消费 Q 弹标记，压当前前台视频，

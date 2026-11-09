@@ -511,5 +511,183 @@ console.log('\n=== 12. 点击三态：睡着叫醒 / 醒来中打断 / 清醒照
   ok(!!oc && /if \(this\.PET_SLEEP_WokeByClick\) \{/.test(oc[0]), 'onClick 仍靠 WokeByClick 跳过「第一下」的点击回应');
 }
 
+// ---------------------------------------------------------------- 13. switchTo 内部的醒来保护
+// 这一节是本次（2026-11-09）的根治：此前每条守卫都长在**调用方**（playOnce / moodCue /
+// events.js 三处 / scheduleNextIdle / tryMove / 菜单分发 …），而 switchTo() 是唯一必经环节。
+// 只要新增一个会切动画的调用方忘了补守卫，醒来就被掐一次 —— 用户说的那个「**又**」。
+// 所以把不变量收进 switchTo：醒来期间只允许切到醒来段本身。
+console.log('\n=== 13. switchTo 内部的醒来保护（不变量收口）===');
+const switchBody = extract('switchTo', '\\(next, nextOnce\\)');
+ok(!!switchBody, '找到 switchTo 的方法体');
+if (switchBody) {
+  const guardRe = /if \(this\.PET_SLEEP_Waking && next !== PET_SLEEP_WAKE\)/;
+  ok(guardRe.test(switchBody), 'switchTo 里有「醒来期间只允许切醒来段」的守卫');
+  const guardAt = switchBody.search(guardRe);
+  const clearAt = switchBody.indexOf('oldElNow.onended = null');
+  ok(guardAt >= 0 && clearAt > 0 && guardAt < clearAt,
+    '守卫在「摘旧 video onended」**之前**（顺序反了等于没加）', `guard@${guardAt} clear@${clearAt}`);
+  ok(/PET_SLEEP_WakeBy/.test(switchBody) && /overdue/.test(switchBody),
+    '守卫带 WakeBy 自愈（看门狗还没跑到时不会永久拦住切换）');
+  ok(/PET_SLEEP_WAKE_MAX_MS/.test(switchBody), '自愈阈值复用 PET_SLEEP_WAKE_MAX_MS（不另写一个魔数）');
+  ok(/console\.info\(/.test(switchBody) && /console\.warn\(/.test(switchBody),
+    '拦住/放行都留痕（console.info / console.warn）');
+  // 只 return 不回滚是不够的：tryMove / scheduleNextIdle 先写 this.anim 再调 switchTo
+  ok(/this\.anim = PET_SLEEP_WAKE/.test(switchBody), '被拦时把 this.anim 回滚到醒来段');
+  ok(/this\.pendingMove = null/.test(switchBody), '被拦时清掉 pendingMove（否则宠物再也走不动）');
+}
+
+if (switchBody) {
+  // 把真的 switchTo 装到一台可控机器上跑 —— 不是读源码猜行为。
+  let clock2 = 5000;
+  const fakePerf2 = { now: () => clock2 };
+  const makeVideo = (name) => {
+    const el = {
+      name, onended: null, onerror: null, src: '', loop: false, muted: false,
+      autoplay: false, playsInline: false, readyState: 0, paused: false,
+      style: {}, _listeners: {},
+      classList: { add() {}, remove() {} },
+      addEventListener(t, fn) { (el._listeners[t] = el._listeners[t] || []).push(fn); },
+      removeEventListener(t, fn) { el._listeners[t] = (el._listeners[t] || []).filter((f) => f !== fn); },
+      load() {},
+      play() { return Promise.resolve(); },
+      pause() { el.paused = true; },
+      fire(t) {
+        for (const f of (el._listeners[t] || []).slice()) f();
+        // onended 是属性式回调（switchTo 里就是 el.onended = ...），
+        // 不在这里手动调的话「醒来播完」永远测不出来
+        if (t === 'ended' && typeof el.onended === 'function') el.onended();
+      },
+    };
+    return el;
+  };
+  const buildSwitch = (videoA, videoB, timerBag, logs) => {
+    const factory = new Function(
+      'window', 'performance', 'console', 'S', 'PET_SLEEP_WAKE', 'PET_SLEEP_WAKE_MAX_MS',
+      'return ({ ' + switchBody + ' });',
+    );
+    return factory(
+      { setTimeout: (fn, ms) => { const id = timerBag.n++; timerBag.m.set(id, { fn, ms }); return id; },
+        clearTimeout: (id) => timerBag.m.delete(id) },
+      fakePerf2,
+      { info: (s) => logs.push('info:' + s), warn: (s) => logs.push('warn:' + s), log: () => {}, error: () => {} },
+      { ANIMATION_EXT: '.webm' },
+      SLEEP_WAKE,
+      WAKE_MAX_MS,
+    );
+  };
+  const freshHost = () => {
+    clock2 = 5000;
+    const videoA = makeVideo('A');
+    const videoB = makeVideo('B');
+    const timerBag = { n: 1, m: new Map() };
+    const logs = [];
+    const api = buildSwitch(videoA, videoB, timerBag, logs);
+    const host = {
+      PET_SLEEP_On: false, PET_SLEEP_Waking: false, PET_SLEEP_WakeBy: 0,
+      pending: null, pendingSquash: false, pendingMove: null, gen: 0, front: 0,
+      videoA, videoB, assetBase: 'file:///anim/', facing: 'left',
+      warmedAnims: new Set(), anim: '待机呼吸', once: false,
+      endedCalls: 0, squashCalls: 0, driveCalls: 0, moveRef: null,
+      handleEnded() { this.endedCalls++; },
+      startSquash() { this.squashCalls++; },
+      startMoveDrive() { this.driveCalls++; },
+      stopMove() { this.moveRef = null; this.pendingMove = null; },
+      switchTo: api.switchTo,
+    };
+    return { host, videoA, videoB, logs, timerBag };
+  };
+
+  // 13.1 让醒来段真的"播起来"：切过去 → 触发 loadeddata → front 翻到 B，B.onended 挂上播完回调
+  const playWake = (h) => {
+    h.anim = SLEEP_WAKE; h.once = true;
+    h.switchTo(SLEEP_WAKE, true);
+  };
+  // src 是 encodeURIComponent 过的（中文变 %E7%9D%A1…），断言必须比编码后的
+  const enc = (n) => encodeURIComponent(n);
+  const srcOf = (h) => (h.videoA.src || '') + '|' + (h.videoB.src || '');
+  const settle = (el) => { el.readyState = 4; el.fire('loadeddata'); };
+
+  {
+    const { host, videoB } = freshHost();
+    host.PET_SLEEP_On = true;
+    host.PET_SLEEP_Waking = true;
+    host.PET_SLEEP_WakeBy = clock2 + WAKE_MAX_MS;
+    playWake(host);
+    settle(videoB);   // front: 0 → 1，此时 videoB 是前台、挂着 handleEnded
+    ok(host.front === 1, '前置：醒来段已就位（front=1）', String(host.front));
+    ok(typeof videoB.onended === 'function', '前置：醒来段的 onended 已挂上播完回调');
+
+    // 旧 bug 复现路径：任意调用方在这里切动画，switchTo 一进来就摘掉 videoB.onended
+    host.switchTo('开心跃动', true);
+    ok(typeof videoB.onended === 'function',
+      '醒来期间切别的动画被拦，醒来段的 onended **没被摘掉**');
+    ok(videoB.src.indexOf(enc(SLEEP_WAKE)) >= 0, '前台仍是醒来段', videoB.src);
+    ok(host.anim === SLEEP_WAKE, 'this.anim 被回滚到醒来段（不改的话 handleEnded 认不出）', host.anim);
+
+    // 关键：tryMove() / scheduleNextIdle() 是「先写 this.anim 再 switchTo」。
+    // 早退如果只 return，anim 已经被改成新名字，醒来照样收不了尾。这里把那条写法完整复现。
+    host.anim = '边跑边笑';
+    host.switchTo('边跑边笑', true);
+    ok(host.anim === SLEEP_WAKE, '「先写 anim 再切」的调用方也被回滚（tryMove / scheduleNextIdle 的真实写法）', host.anim);
+
+    // pendingMove 若不清理，会永久挡着下一次 tryMove（守卫 return 之后它没被消费）
+    host.anim = SLEEP_WAKE;
+    host.pendingMove = { some: 'plan' };
+    host.switchTo('走路', true);
+    ok(host.pendingMove === null, '被拦时 pendingMove 一并清掉（否则宠物再也走不动）', String(host.pendingMove));
+
+    // 决定性断言：醒来段照常能播完 —— 这才是用户要的「不被挤掉」
+    videoB.fire('ended');
+    ok(host.endedCalls === 1, '醒来段播完仍然触发 handleEnded（旧实现这里是 0）', String(host.endedCalls));
+  }
+
+  // 13.2 允许切到醒来段本身（Wake 幂等之后的重播、以及 FromMenu 直接点醒来段）
+  {
+    const { host, videoB } = freshHost();
+    host.PET_SLEEP_On = true;
+    host.PET_SLEEP_Waking = true;
+    host.PET_SLEEP_WakeBy = clock2 + WAKE_MAX_MS;
+    playWake(host);
+    settle(videoB);
+    const genBefore = host.gen;
+    host.switchTo(SLEEP_WAKE, true);
+    ok(host.gen === genBefore + 1, '醒来期间切醒来段本身**不拦**（正常走完 switchTo）',
+      `${genBefore} → ${host.gen}`);
+  }
+
+  // 13.3 WakeBy 自愈：看门狗每 5 秒才跑一次，超时后即使还没轮到它也不该继续拦
+  {
+    const { host } = freshHost();
+    host.PET_SLEEP_On = true;
+    host.PET_SLEEP_Waking = true;
+    host.PET_SLEEP_WakeBy = clock2 - 1;   // 已经超时
+    host.switchTo('开心跃动', true);
+    // front 仍是 0，所以 switchTo 的目标是 videoB
+    ok(host.videoB.src.indexOf(enc('开心跃动')) >= 0, '醒来超时后放行切换（不会永久卡死）', host.videoB.src);
+    ok(host.pending && host.pending.anim === '开心跃动', 'pending 记了新目标');
+  }
+
+  // 13.4 正常打断路径不受影响：EndSleep/Skip 先把 Waking 清成 false，之后随便切
+  {
+    const { host } = freshHost();
+    host.PET_SLEEP_On = true;
+    host.PET_SLEEP_Waking = true;
+    host.PET_SLEEP_WakeBy = clock2 + WAKE_MAX_MS;
+    host.switchTo('吃小鱼干', true);
+    ok(srcOf(host).indexOf(enc('吃小鱼干')) < 0, '醒来期间仍被拦（守住不变量）', srcOf(host));
+    host.PET_SLEEP_Waking = false;   // 等同 EndSleep / Skip 清标志
+    host.PET_SLEEP_On = false;
+    host.switchTo('吃小鱼干', true);
+    ok(srcOf(host).indexOf(enc('吃小鱼干')) >= 0, '打断后立刻能切（EndSleep/Skip 路径零改动）', srcOf(host));
+  }
+
+  // 13.5 完全没睡时零影响
+  {
+    const { host } = freshHost();
+    host.switchTo('待机呼吸', true);
+    ok(srcOf(host).indexOf(enc('待机呼吸')) >= 0, '清醒时 switchTo 行为完全不变', srcOf(host));
+  }
+}
+
 console.log(`\n=== ${pass} 通过 / ${fail} 失败 ===`);
 process.exit(fail ? 1 : 0);
