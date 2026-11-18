@@ -74,5 +74,39 @@ ok(typeof realSlot === 'string' && realSlot.length > 1,
   `真实字符串 length=${realSlot.length} > 1 —— 所以必须判 Array.isArray，只判 length 会误判`);
 ok(!Array.isArray(realSlot), 'Array.isArray 正确识别为单候选');
 
+console.log('\n=== 5. 源码级断言：resumeWorkStatusAnim 单候选必须走 playOnce ===');
+// 上面几节只复刻了计数逻辑，漏掉了真正的 bug：sprite.js 的 resumeWorkStatusAnim
+// 单候选分支仍走 switchTo(name,false) → loop=true → handleEnded 永不触发 → 随机链停住。
+// 这里直接读源码方法体，确保两处入口（events.js onWorkTick / sprite.js resume）语义一致。
+const fs = require('node:fs');
+const spriteSrc = fs.readFileSync(
+  path.join(__dirname, '..', 'app', 'runtime', 'electron-helper', 'sprite.js'), 'utf8'
+).replace(/\r\n/g, '\n');
+const eventsSrc = fs.readFileSync(
+  path.join(__dirname, '..', 'app', 'runtime', 'electron-helper', 'events.js'), 'utf8'
+).replace(/\r\n/g, '\n');
+
+// 抽取 resumeWorkStatusAnim 方法体（非贪婪到下一个同级方法定义）
+const mm = spriteSrc.match(/\n  resumeWorkStatusAnim\(\) \{[\s\S]*?\n  \}\n/);
+ok(!!mm, '在 sprite.js 里找到 resumeWorkStatusAnim 方法体');
+if (mm) {
+  const body = mm[0];
+  ok(/this\.playOnce\(name\)/.test(body), '单候选分支用 playOnce（once=true, loop=false, 保留 onended）');
+  // 去掉注释行再断言，避免新注释里「绝不能走 switchTo(name,false)」被误判
+  const codeOnly = body.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+  ok(!/switchTo\(name,\s*false\)/.test(codeOnly), '不再有 switchTo(name,false) 的无限 loop 分支（可执行代码）');
+  ok(!/单候选：无限循环/.test(body), '旧的「单候选：无限循环」注释已清除');
+  // playOnce 必须在 rotating 判定之外（即无条件执行），否则单候选仍可能漏掉
+  const playOnceIdx = body.indexOf('this.playOnce(name)');
+  const rotatingIdx = body.indexOf('rotating');
+  ok(rotatingIdx === -1 || playOnceIdx > -1, 'playOnce 存在即可（不再依赖 rotating 分支区分）');
+}
+// events.js 的 onWorkTick 也必须是 playOnce（两处入口一致）
+const em = eventsSrc.match(/onWorkTick[\s\S]*?\n\};/);
+ok(!!em, '在 events.js 里找到 onWorkTick');
+if (em) {
+  ok(/this\.playOnce\(name\)/.test(em[0]), 'events.js onWorkTick 也是 playOnce（两处入口语义一致）');
+}
+
 console.log(`\n=== ${pass} 通过 / ${fail} 失败 ===`);
 process.exit(fail === 0 ? 0 : 1);

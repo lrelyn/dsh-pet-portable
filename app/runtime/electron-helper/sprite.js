@@ -2415,10 +2415,14 @@ class PetSprite {
     console.log(
       '[dsh-pet] ' + new Date().toTimeString().slice(0, 8) + ' pet=' + this.pet.id + ' 恢复工作状态动画: ' + name,
     );
-    const rotating = Array.isArray(slot) && slot.length > 1;
-    if (rotating)
-      this.playOnce(name); // 多候选：播完由 handleEnded 轮换
-    else this.switchTo(name, false); // 单候选：无限循环
+    // 多候选和单候选统一走 playOnce（once=true、loop=false、保留 onended）。
+    // 绝不能对单候选走 switchTo(name, false)：那会把 el.loop=true、onended=null，
+    // handleEnded 永不触发 → 随机链彻底停住 → 桌宠卡在同一段工作动画上无限重复。
+    // 这与 events.js:108-114 onWorkTick 是同一个修复（2026-10-27 那边改了，这里漏改，
+    // 直到本地前台检测按分钟级持续触发 workStatus 才暴露成「平常动作不播了」）。
+    // 单候选播完后 handleEnded 里 nextWorkStatusAnim 返回 null → 再回到本方法，
+    // 由 workInterleave 交替决定「继续工作动画」还是「回随机链」。
+    this.playOnce(name);
     return true;
   }
 
